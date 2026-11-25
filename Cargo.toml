@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/meraki-core",
+    "crates/meraki-engine",
+    "crates/meraki-ui",
+    "crates/meraki-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Meraki Contributors"]
+repository = "https://github.com/lindnergui/Editor-de-video-meraki"
+
+[workspace.dependencies]
+# Utilitários compartilhados
+bytes = "1"
+crossbeam-channel = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Camada 2: Motor multimídia (GStreamer + GES)
+glib = "0.20"
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+gstreamer-controller = "0.23"
+gstreamer-editing-services = "0.23"
+gstreamer-pbutils = "0.23"
+gstreamer-video = "0.23"
+
+# Camada 3: Interface nativa em Rust (GPU via wgpu)
+iced = { version = "0.13", features = ["wgpu", "canvas", "tokio", "svg", "image"] }
+rfd = "0.15"
+
+# Crates internos
+meraki-core = { path = "crates/meraki-core" }
+meraki-engine = { path = "crates/meraki-engine" }
+meraki-ui = { path = "crates/meraki-ui" }
+
+[profile.dev.package."*"]
+# Compila dependências externas otimizadas mesmo em modo debug para manter o preview fluido
+opt-level = 2

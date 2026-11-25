@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (Ubuntu + GES)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependências GStreamer, GES e wgpu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config cmake \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libges-1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+            libasound2-dev libwayland-dev libxkbcommon-dev libx11-dev libvulkan-dev
+
+      - name: Instalar Rust stable + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cargo check
+        run: cargo check --workspace
+
+      - name: Cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Testes core, ui e app
+        run: cargo test -p meraki-core -p meraki-ui -p meraki-app
+
+      - name: Testes do motor GStreamer/GES
+        env:
+          G_DEBUG: fatal-criticals
+        run: cargo test -p meraki-engine
+
+  windows:
+    name: Windows (MSVC + GStreamer)
+    runs-on: windows-latest
+    env:
+      GST_VERSION: "1.24.13"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar GStreamer MSVC x86_64 (runtime + devel)
+        shell: pwsh
+        run: |
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
+          $rt = Join-Path $env:RUNNER_TEMP "gst-rt.msi"
+          $dev = Join-Path $env:RUNNER_TEMP "gst-dev.msi"
+          curl.exe -fsSL "$base/gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi" -o $rt
+          curl.exe -fsSL "$base/gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi" -o $dev
+          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$rt`" /qn /norestart INSTALLDIR=C:\gstreamer"
+          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$dev`" /qn /norestart INSTALLDIR=C:\gstreamer"
+          $gstRoot = [Environment]::GetEnvironmentVariable("GSTREAMER_1_0_ROOT_MSVC_X86_64", "Machine")
+          if (-not $gstRoot -or -not (Test-Path $gstRoot)) {
+            $gstRoot = "C:\gstreamer\1.0\msvc_x86_64"
+          }
+          if (-not (Test-Path $gstRoot)) {
+            throw "GStreamer MSVC não encontrado em $gstRoot"
+          }
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gstRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PKG_CONFIG_PATH=$gstRoot\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$gstRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Instalar Rust stable + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cargo check
+        run: cargo check --workspace
+
+      - name: Cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Testes core, ui e app
+        run: cargo test -p meraki-core -p meraki-ui -p meraki-app
+
+      - name: Testes do motor GStreamer/GES
+        env:
+          G_DEBUG: fatal-criticals
+        run: cargo test -p meraki-engine

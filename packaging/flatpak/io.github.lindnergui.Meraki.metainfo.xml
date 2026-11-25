@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.lindnergui.Meraki</id>
+  <name>Meraki</name>
+  <summary>Fast, crash-resistant open-source video editor in Rust</summary>
+  <summary xml:lang="pt_BR">Editor de vídeo open-source rápido e estável em Rust</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <developer id="io.github.lindnergui">
+    <name>Meraki Contributors</name>
+  </developer>
+  <description>
+    <p>
+      Meraki is a native open-source video editor built with Rust, Iced (wgpu), and GStreamer
+      Editing Services (GES), focused on rock-solid responsiveness and a clean five-tab workflow:
+      Files, Edit, Effects, Audio, and Delivery.
+    </p>
+    <p xml:lang="pt_BR">
+      O Meraki é um editor de vídeo open-source nativo desenvolvido em Rust, Iced (wgpu) e
+      GStreamer Editing Services (GES), projetado para estabilidade extrema sem travamentos e uma
+      interface minimalista organizada em cinco abas: Arquivos, Edição, Efeitos, Áudio e Entrega.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.lindnergui.Meraki.desktop</launchable>
+  <url type="homepage">https://github.com/lindnergui/Editor-de-video-meraki</url>
+  <url type="bugtracker">https://github.com/lindnergui/Editor-de-video-meraki/issues</url>
+  <url type="vcs-browser">https://github.com/lindnergui/Editor-de-video-meraki</url>
+  <provides>
+    <binary>meraki</binary>
+    <mediatype>application/x-meraki-project</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-25">
+      <description>
+        <p>Initial public release v0.1.0 featuring the 5-tab editor, 720p proxy cache, real-time 4-band audio mixer, .meraki project persistence, and native GPU preview.</p>
+      </description>
+    </release>
+  </releases>
+</component>

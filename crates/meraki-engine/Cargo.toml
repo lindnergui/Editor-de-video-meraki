@@ -1,0 +1,23 @@
+[package]
+name = "meraki-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+meraki-core.workspace = true
+bytes.workspace = true
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+glib.workspace = true
+gstreamer.workspace = true
+gstreamer-app.workspace = true
+gstreamer-controller.workspace = true
+gstreamer-editing-services.workspace = true
+gstreamer-pbutils.workspace = true
+gstreamer-video.workspace = true

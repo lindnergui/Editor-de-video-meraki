@@ -1,0 +1,52 @@
+app-id: io.github.lindnergui.Meraki
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: meraki
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio
+  - --filesystem=home
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/meraki/cargo
+
+modules:
+  - name: gst-editing-services
+    buildsystem: meson
+    config-opts:
+      - -Dexamples=disabled
+      - -Dtests=disabled
+      - -Ddoc=disabled
+      - -Dintrospection=disabled
+      - -Dvalidate=disabled
+      - -Dpython=disabled
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/gtk-doc
+    sources:
+      - type: archive
+        url: https://gstreamer.freedesktop.org/src/gst-editing-services/gst-editing-services-1.24.13.tar.xz
+        sha256: e9792ecff0df0b1dbbf90cfb271b9ce840bc048148c2d9d49fb6c6062bd18f4d
+
+  - name: meraki
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --offline --bin meraki-app
+      - install -Dm755 target/release/meraki-app /app/bin/meraki
+      - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.desktop /app/share/applications/io.github.lindnergui.Meraki.desktop
+      - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.metainfo.xml /app/share/metainfo/io.github.lindnergui.Meraki.metainfo.xml
+      - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.svg /app/share/icons/hicolor/scalable/apps/io.github.lindnergui.Meraki.svg
+      - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.mime.xml /app/share/mime/packages/io.github.lindnergui.Meraki.xml
+    sources:
+      - type: dir
+        path: ../..

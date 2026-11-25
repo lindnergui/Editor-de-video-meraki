@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows-exe:
+    name: Windows Installer (.exe)
+    runs-on: windows-latest
+    env:
+      GST_VERSION: "1.24.13"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolver versão da tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $num = $tag.TrimStart("v")
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "APP_VERSION=$num" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Instalar GStreamer MSVC x86_64 (runtime + devel)
+        shell: pwsh
+        run: |
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
+          $rt = Join-Path $env:RUNNER_TEMP "gst-rt.msi"
+          $dev = Join-Path $env:RUNNER_TEMP "gst-dev.msi"
+          curl.exe -fsSL "$base/gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi" -o $rt
+          curl.exe -fsSL "$base/gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi" -o $dev
+          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$rt`" /qn /norestart INSTALLDIR=C:\gstreamer"
+          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$dev`" /qn /norestart INSTALLDIR=C:\gstreamer"
+          $gstRoot = [Environment]::GetEnvironmentVariable("GSTREAMER_1_0_ROOT_MSVC_X86_64", "Machine")
+          if (-not $gstRoot -or -not (Test-Path $gstRoot)) {
+            $gstRoot = "C:\gstreamer\1.0\msvc_x86_64"
+          }
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gstRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PKG_CONFIG_PATH=$gstRoot\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$gstRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Instalar Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilar meraki-app release
+        run: cargo build --release --bin meraki-app
+
+      - name: Coletar runtime GStreamer e montar bundle Windows
+        shell: pwsh
+        run: |
+          .\packaging\windows\collect_bundle.ps1 `
+            -BinaryPath "target\release\meraki-app.exe" `
+            -GStreamerRoot "$env:GSTREAMER_1_0_ROOT_MSVC_X86_64" `
+            -OutputDir "dist\windows\meraki"
+
+      - name: Compilar instalador Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+          if (-not $iscc -and (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          if (-not $iscc) {
+            choco install innosetup -y
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DAppVersion=$env:APP_VERSION" "packaging\windows\meraki.iss"
+          $built = "dist\windows\Meraki-Setup-$env:APP_VERSION-x64.exe"
+          $tagged = "dist\windows\Meraki-Setup-$env:RELEASE_TAG-x64.exe"
+          if ((Test-Path $built) -and ($built -ne $tagged)) {
+            Move-Item -Path $built -Destination $tagged -Force
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/windows/Meraki-Setup-${{ env.RELEASE_TAG }}-x64.exe
+
+  linux-flatpak:
+    name: Linux Flatpak (.flatpak)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Flatpak e Runtime 24.08
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder elfutils
+          flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y --noninteractive flathub \
+            org.freedesktop.Platform//24.08 \
+            org.freedesktop.Sdk//24.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//24.08
+
+      - name: Instalar Rust stable para gerar vendor offline
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Gerar vendor Cargo offline para o sandbox Flatpak
+        run: |
+          mkdir -p .cargo
+          cargo vendor --locked vendor > .cargo/config.toml
+
+      - name: Construir bundle Flatpak
+        run: |
+          flatpak-builder --force-clean --repo=repo build-dir \
+            packaging/flatpak/io.github.lindnergui.Meraki.yml
+          flatpak build-bundle repo \
+            "Meraki-${{ github.ref_name }}-x86_64.flatpak" \
+            io.github.lindnergui.Meraki
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak
+          path: Meraki-${{ github.ref_name }}-x86_64.flatpak
+
+  publish:
+    name: Publish GitHub Release
+    needs: [windows-exe, linux-flatpak]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Gerar SHA256SUMS.txt
+        working-directory: release-assets
+        run: sha256sum Meraki-* > SHA256SUMS.txt
+
+      - name: Criar GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/Meraki-Setup-${{ github.ref_name }}-x64.exe
+            release-assets/Meraki-${{ github.ref_name }}-x86_64.flatpak
+            release-assets/SHA256SUMS.txt

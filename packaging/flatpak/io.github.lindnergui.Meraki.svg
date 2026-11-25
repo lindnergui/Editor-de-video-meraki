@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="merakiBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#735BF2"/>
+      <stop offset="100%" stop-color="#624AE0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#merakiBg)"/>
+  <rect x="9.5" y="9.5" width="109" height="109" rx="26.5" fill="none" stroke="#8670F5" stroke-opacity="0.55" stroke-width="2"/>
+  <rect x="28" y="35" width="72" height="58" rx="11" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linejoin="round"/>
+  <polygon points="55,49 82,64 55,79" fill="#FFFFFF"/>
+</svg>

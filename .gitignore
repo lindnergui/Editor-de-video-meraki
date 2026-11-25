@@ -1,0 +1,27 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+/vendor/
+.cargo/config.toml
+
+# Empacotamento e releases locais
+dist/
+build-dir/
+.flatpak-builder/
+repo/
+release-assets/
+*.flatpak
+*.exe
+*.msi
+SHA256SUMS.txt
+
+# Temporários e sistema operacional
+*.tmp
+*.bak
+*.log
+.DS_Store
+Thumbs.db
+
+# Projetos locais de teste e auto-save
+*.meraki
+meraki-autosave.meraki

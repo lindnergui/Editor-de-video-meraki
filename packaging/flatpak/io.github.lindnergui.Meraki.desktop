@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Meraki
+GenericName=Video Editor
+GenericName[pt_BR]=Editor de Vídeo
+Comment=Native open-source video editor built with Rust and GStreamer
+Comment[pt_BR]=Editor de vídeo open-source nativo em Rust com estabilidade extrema
+Exec=meraki %f
+Icon=io.github.lindnergui.Meraki
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=application/x-meraki-project;
+StartupNotify=true
+StartupWMClass=meraki
+Keywords=video;editor;timeline;gstreamer;rust;

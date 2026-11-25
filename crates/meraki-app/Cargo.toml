@@ -1,0 +1,14 @@
+[package]
+name = "meraki-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+meraki-core.workspace = true
+meraki-engine.workspace = true
+meraki-ui.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
