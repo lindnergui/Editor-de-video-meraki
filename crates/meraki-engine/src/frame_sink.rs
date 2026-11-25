@@ -8,7 +8,7 @@ use gstreamer_video::prelude::*;
 use meraki_core::PreviewQuality;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::warn;
+use tracing::{debug, warn};
 
 #[derive(Debug, Error)]
 pub enum FrameSinkError {
@@ -26,7 +26,7 @@ pub enum FrameSinkError {
     GhostPad(String),
 }
 
-/// Encapsula `videoconvert ! videoscale ! capsfilter ! appsink` para extração segura de RGBA8.
+/// Encapsula `videoconvertscale ! capsfilter ! appsink` para extração segura de RGBA8.
 pub(crate) struct PreviewVideoSink {
     bin: gst::Bin,
     capsfilter: gst::Element,
@@ -39,13 +39,12 @@ impl PreviewVideoSink {
         worker: Arc<EngineWorkerChannel>,
     ) -> Result<Self, FrameSinkError> {
         let bin = gst::Bin::with_name("meraki-video-preview-bin");
-        let videoconvert = make_element("videoconvert", "meraki-preview-convert")?;
-        let videoscale = make_element("videoscale", "meraki-preview-scale")?;
+        // Negocia formato RGBA e dimensões juntas, sem caps intermediárias.
+        let convert_scale = make_element("videoconvertscale", "meraki-preview-convert-scale")?;
         let capsfilter = make_element("capsfilter", "meraki-preview-caps")?;
         let appsink_elem = make_element("appsink", "meraki-preview-appsink")?;
 
-        configure_multithreading(&videoconvert);
-        configure_multithreading(&videoscale);
+        configure_multithreading(&convert_scale);
         capsfilter.set_property("caps", preview_caps(initial_quality));
 
         let appsink = appsink_elem
@@ -75,11 +74,11 @@ impl PreviewVideoSink {
                 .build(),
         );
 
-        bin.add_many([&videoconvert, &videoscale, &capsfilter, &appsink_elem])
+        bin.add_many([&convert_scale, &capsfilter, &appsink_elem])
             .map_err(|err| FrameSinkError::BinAdd(err.to_string()))?;
-        gst::Element::link_many([&videoconvert, &videoscale, &capsfilter, &appsink_elem])
+        gst::Element::link_many([&convert_scale, &capsfilter, &appsink_elem])
             .map_err(|err| FrameSinkError::Link(err.to_string()))?;
-        attach_sink_ghost_pad(&bin, &videoconvert, "videoconvert")?;
+        attach_sink_ghost_pad(&bin, &convert_scale, "videoconvertscale")?;
 
         Ok(Self {
             bin,
@@ -158,6 +157,8 @@ fn audio_preview_output_sink(headless: bool) -> Result<gst::Element, FrameSinkEr
         }
     }
     let sink = make_element("fakesink", "meraki-preview-afakesink")?;
+    // O sink de vídeo determina o preroll mesmo se o áudio ainda não tiver buffers.
+    sink.set_property("async", false);
     sink.set_property("sync", true);
     Ok(sink)
 }
@@ -198,6 +199,8 @@ fn attach_sink_ghost_pad(
 fn emit_sample_frame(worker: &EngineWorkerChannel, sample: &gst::Sample) {
     if let Some(frame) = sample_to_video_frame(sample) {
         worker.emit_drop_if_full(EngineEvent::FrameReady(frame));
+    } else {
+        debug!(caps = ?sample.caps(), "amostra de preview sem quadro RGBA mapeável");
     }
 }
 
@@ -248,11 +251,12 @@ mod tests {
     use crate::protocol::create_engine_channel;
 
     #[test]
-    fn headless_audio_preview_uses_a_clocked_fake_sink() {
+    fn headless_audio_preview_uses_a_clocked_fake_sink_without_preroll_wait() {
         crate::ensure_media_initialized().unwrap();
         let sink = audio_preview_output_sink(true).unwrap();
         assert_eq!(sink.factory().unwrap().name(), "fakesink");
         assert!(sink.property::<bool>("sync"));
+        assert!(!sink.property::<bool>("async"));
     }
 
     #[test]
@@ -262,11 +266,12 @@ mod tests {
         let sink = PreviewVideoSink::new(PreviewQuality::Proxy720p, Arc::new(worker))
             .expect("deve construir PreviewVideoSink");
 
-        for elem_name in ["meraki-preview-convert", "meraki-preview-scale"] {
-            let elem = sink.bin().by_name(elem_name).expect("elemento deve estar no bin");
-            if elem.find_property("n-threads").is_some() {
-                assert_eq!(elem.property::<u32>("n-threads"), 0);
-            }
+        let elem = sink
+            .bin()
+            .by_name("meraki-preview-convert-scale")
+            .expect("elemento deve estar no bin");
+        if elem.find_property("n-threads").is_some() {
+            assert_eq!(elem.property::<u32>("n-threads"), 0);
         }
         assert_eq!(sink._appsink.property::<u32>("max-buffers"), 1);
         assert!(sink._appsink.property::<bool>("drop"));

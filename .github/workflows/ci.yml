@@ -49,7 +49,7 @@ jobs:
           GST_DEBUG: "2"
           MERAKI_HEADLESS_AUDIO: "1"
           RUST_LOG: meraki=debug,gstreamer=warn
-        run: cargo test -p meraki-engine
+        run: cargo test --no-fail-fast -p meraki-engine
 
   windows:
     name: Windows (MSVC + GStreamer)

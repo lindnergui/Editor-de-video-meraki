@@ -209,6 +209,15 @@ impl PlaybackEngine {
                         err.error()
                     )));
                 }
+                gst::MessageView::Warning(warning) => {
+                    let source = warning.src().map(|src| src.path_string()).unwrap_or_default();
+                    warn!(%source, warning = %warning.error(), detail = ?warning.debug(), "aviso do pipeline de preview");
+                }
+                gst::MessageView::StateChanged(state)
+                    if state.src() == Some(self.graph.pipeline.upcast_ref()) =>
+                {
+                    debug!(current = ?state.current(), pending = ?state.pending(), "estado do pipeline de preview mudou");
+                }
                 gst::MessageView::Eos(_) => {
                     if let Err(err) = self.pause() {
                         worker.emit_critical(EngineEvent::Error(err.to_string()));

@@ -9,6 +9,11 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn mp4_preview_survives_effect_resync_and_scrubbing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
+
     let mp4 = TempFileGuard::new("preview_resync", "mp4");
     write_test_mp4(&mp4.0);
 
