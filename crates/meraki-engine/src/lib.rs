@@ -16,6 +16,7 @@ mod playback_tests;
 pub mod protocol;
 mod proxy;
 mod proxy_cache;
+mod render_monitor;
 mod thumbnailer;
 
 pub use protocol::{

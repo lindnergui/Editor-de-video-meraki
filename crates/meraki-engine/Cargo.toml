@@ -21,3 +21,6 @@ gstreamer-controller.workspace = true
 gstreamer-editing-services.workspace = true
 gstreamer-pbutils.workspace = true
 gstreamer-video.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

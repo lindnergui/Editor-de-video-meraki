@@ -12,7 +12,7 @@ env:
 jobs:
   linux:
     name: Linux (Ubuntu + GES)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +25,7 @@ jobs:
             libges-1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
             libasound2-dev libwayland-dev libxkbcommon-dev libx11-dev libvulkan-dev
+          pkg-config --modversion gstreamer-1.0 gst-editing-services-1.0
 
       - name: Instalar Rust stable + clippy
         uses: dtolnay/rust-toolchain@stable
@@ -45,6 +46,9 @@ jobs:
       - name: Testes do motor GStreamer/GES
         env:
           G_DEBUG: fatal-criticals
+          GST_DEBUG: "2"
+          MERAKI_HEADLESS_AUDIO: "1"
+          RUST_LOG: meraki=debug,gstreamer=warn
         run: cargo test -p meraki-engine
 
   windows:

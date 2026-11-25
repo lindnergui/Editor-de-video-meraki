@@ -3,47 +3,44 @@ use crate::audio_meter::AudioMeterAggregator;
 use crate::clip_prepare::{PreparedClip, PreparedSource};
 use crate::discoverer;
 use crate::effects_ges;
-use crate::protocol::{TimelineRenderClip, TrackAudioMix};
+use crate::encoding_profiles::wav_pcm_caps;
+use crate::protocol::TrackAudioMix;
 use gstreamer as gst;
 use gstreamer_editing_services as ges;
 use gstreamer_editing_services::prelude::*;
-use meraki_core::{ExportSettings, PreviewQuality, TrackKind};
+use meraki_core::{ExportFormat, ExportSettings, PreviewQuality, TrackKind};
 use std::path::Path;
 
-pub(crate) fn detect_active_streams(prepared: &[PreparedClip], audio_only: bool) -> (bool, bool) {
-    let mut has_video = false;
-    let mut has_audio = false;
-    for item in prepared {
-        match &item.source {
-            PreparedSource::Title(_) if !audio_only => has_video = true,
-            PreparedSource::Media { track_types, .. } => {
-                if !audio_only && track_types.contains(ges::TrackType::VIDEO) {
-                    has_video = true;
-                }
-                if track_types.contains(ges::TrackType::AUDIO) {
-                    has_audio = true;
-                }
-            }
-            _ => {}
-        }
+fn clip_render_tracks(item: &PreparedClip, audio_only: bool) -> ges::TrackType {
+    match (&item.source, audio_only) {
+        (PreparedSource::Media { track_types, .. }, false) => *track_types,
+        (PreparedSource::Media { track_types, .. }, true)
+            if item.render.track_kind != TrackKind::Overlay => *track_types & ges::TrackType::AUDIO,
+        (PreparedSource::Title(_), false) => ges::TrackType::VIDEO,
+        _ => ges::TrackType::empty(),
     }
-    (has_video, has_audio)
+}
+
+pub(crate) fn detect_active_streams(prepared: &[PreparedClip], audio_only: bool) -> ges::TrackType {
+    prepared.iter().fold(ges::TrackType::empty(), |tracks, item| {
+        tracks | clip_render_tracks(item, audio_only)
+    })
 }
 
 pub(crate) struct RenderSpec<'a> {
     pub settings: &'a ExportSettings,
     pub audio_tracks: Vec<TrackAudioMix>,
     pub prepared: &'a [PreparedClip],
-    pub has_video: bool,
-    pub has_audio: bool,
     pub profile: &'a gstreamer_pbutils::EncodingProfile,
     pub output_path: &'a Path,
     pub worker: &'a crate::protocol::EngineWorkerChannel,
 }
 
 pub(crate) fn build_render_pipeline(spec: RenderSpec<'_>) -> Result<(ges::Timeline, ges::Pipeline), String> {
+    let audio_only = spec.settings.format.is_audio_only();
+    let tracks = detect_active_streams(spec.prepared, audio_only);
     let timeline = ges::Timeline::new();
-    if spec.has_video {
+    if tracks.contains(ges::TrackType::VIDEO) {
         let video_track = ges::VideoTrack::new();
         let (w, h) = spec.settings.resolution.dimensions();
         let fps = spec.settings.fps.as_u32();
@@ -55,8 +52,11 @@ pub(crate) fn build_render_pipeline(spec: RenderSpec<'_>) -> Result<(ges::Timeli
         video_track.set_restriction_caps(&caps);
         timeline.add_track(&video_track).map_err(|e| format!("add_video_track: {e}"))?;
     }
-    if spec.has_audio {
+    if tracks.contains(ges::TrackType::AUDIO) {
         let audio_track = ges::AudioTrack::new();
+        if spec.settings.format == ExportFormat::AudioWav {
+            audio_track.set_restriction_caps(&wav_pcm_caps());
+        }
         timeline.add_track(&audio_track).map_err(|e| format!("add_audio_track: {e}"))?;
     }
     timeline.set_auto_transition(true);
@@ -67,14 +67,13 @@ pub(crate) fn build_render_pipeline(spec: RenderSpec<'_>) -> Result<(ges::Timeli
     populate_export_layers(
         &timeline,
         spec.prepared,
-        spec.has_video,
-        spec.has_audio,
+        audio_only,
         &mut audio_dsp,
         &mut meter,
         spec.worker,
     )?;
 
-    if !timeline.commit() {
+    if !timeline.commit_sync() {
         return Err("falha ao confirmar timeline de exportação (commit)".to_string());
     }
     audio_dsp.finalize_after_commit();
@@ -88,6 +87,16 @@ pub(crate) fn build_render_pipeline(spec: RenderSpec<'_>) -> Result<(ges::Timeli
     pipeline
         .set_mode(ges::PipelineFlags::RENDER)
         .map_err(|e| format!("set_mode RENDER: {e}"))?;
+    // Algumas versões do GES criam sinks padrão na transição Null -> Ready,
+    // mesmo com o playsink fora do pipeline de renderização.
+    let unused_preview_sink = |name: &'static str| {
+        gst::ElementFactory::make("fakesink")
+            .name(name)
+            .build()
+            .map_err(|err| format!("falha ao configurar sink inativo {name}: {err}"))
+    };
+    pipeline.preview_set_audio_sink(Some(&unused_preview_sink("meraki-render-unused-audio")?));
+    pipeline.preview_set_video_sink(Some(&unused_preview_sink("meraki-render-unused-video")?));
 
     Ok((timeline, pipeline))
 }
@@ -101,30 +110,23 @@ struct ExportLayerSlot {
 fn populate_export_layers(
     timeline: &ges::Timeline,
     prepared: &[PreparedClip],
-    has_video: bool,
-    has_audio: bool,
+    audio_only: bool,
     audio_dsp: &mut AudioDspController,
     meter: &mut AudioMeterAggregator,
     worker: &crate::protocol::EngineWorkerChannel,
 ) -> Result<(), String> {
     let mut slots: Vec<ExportLayerSlot> = Vec::new();
     for item in prepared {
-        let clip: &TimelineRenderClip = &item.render;
+        let mask = clip_render_tracks(item, audio_only);
+        if mask.is_empty() {
+            continue;
+        }
+        let clip = &item.render;
         let end_ns = clip.timeline_start_ns.saturating_add(clip.duration_ns);
         let layer = acquire_export_layer(timeline, &mut slots, clip.track_kind, clip.timeline_start_ns, end_ns);
 
         match &item.source {
-            PreparedSource::Media { asset, track_types, is_image, natural_size } => {
-                let mut mask = ges::TrackType::empty();
-                if has_video && track_types.contains(ges::TrackType::VIDEO) {
-                    mask |= ges::TrackType::VIDEO;
-                }
-                if has_audio && track_types.contains(ges::TrackType::AUDIO) {
-                    mask |= ges::TrackType::AUDIO;
-                }
-                if mask.is_empty() {
-                    continue;
-                }
+            PreparedSource::Media { asset, is_image, natural_size, .. } => {
                 let inpoint = if *is_image { gst::ClockTime::ZERO } else { gst::ClockTime::from_nseconds(clip.source_in_ns) };
                 let ges_clip = layer
                     .add_asset(
@@ -145,14 +147,13 @@ fn populate_export_layers(
                     audio_dsp.attach_clip_audio(&ges_clip, clip, meter);
                 }
             }
-            PreparedSource::Title(title) if has_video => {
+            PreparedSource::Title(title) => {
                 if let Some(ges_clip) = effects_ges::add_title_clip(&layer, clip, title, worker) {
                     effects_ges::apply_clip_transform(&ges_clip, clip, true, None, PreviewQuality::Full1080p);
                     effects_ges::apply_clip_effects(&ges_clip, clip, worker);
                     effects_ges::apply_transitions_and_keyframes(&ges_clip, clip, None, PreviewQuality::Full1080p);
                 }
             }
-            PreparedSource::Title(_) => {}
         }
     }
     Ok(())

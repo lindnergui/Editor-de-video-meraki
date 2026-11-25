@@ -121,15 +121,7 @@ pub(crate) fn build_audio_preview_sink() -> Result<(gst::Bin, gst::Element), Fra
     let convert = make_element("audioconvert", "meraki-preview-aconv")?;
     let resample = make_element("audioresample", "meraki-preview-aresample")?;
     let volume = make_element("volume", "meraki-preview-volume")?;
-    let sink = match make_element("autoaudiosink", "meraki-preview-asink") {
-        Ok(elem) => elem,
-        Err(err) => {
-            warn!(error = %err, "autoaudiosink indisponível; usando fakesink em áudio");
-            let fake = make_element("fakesink", "meraki-preview-afakesink")?;
-            fake.set_property("sync", true);
-            fake
-        }
-    };
+    let sink = audio_preview_output_sink(std::env::var("MERAKI_HEADLESS_AUDIO").as_deref() == Ok("1"))?;
 
     if gst::ElementFactory::find("level").is_some() {
         match make_element("level", MASTER_LEVEL_ELEMENT_NAME) {
@@ -156,6 +148,18 @@ pub(crate) fn build_audio_preview_sink() -> Result<(gst::Bin, gst::Element), Fra
     attach_sink_ghost_pad(&bin, &convert, "audioconvert")?;
 
     Ok((bin, volume))
+}
+
+fn audio_preview_output_sink(headless: bool) -> Result<gst::Element, FrameSinkError> {
+    if !headless {
+        match make_element("autoaudiosink", "meraki-preview-asink") {
+            Ok(sink) => return Ok(sink),
+            Err(err) => warn!(error = %err, "autoaudiosink indisponível; usando fakesink em áudio"),
+        }
+    }
+    let sink = make_element("fakesink", "meraki-preview-afakesink")?;
+    sink.set_property("sync", true);
+    Ok(sink)
 }
 
 fn configure_multithreading(elem: &gst::Element) {
@@ -242,6 +246,14 @@ fn sample_to_video_frame(sample: &gst::Sample) -> Option<VideoFrame> {
 mod tests {
     use super::*;
     use crate::protocol::create_engine_channel;
+
+    #[test]
+    fn headless_audio_preview_uses_a_clocked_fake_sink() {
+        crate::ensure_media_initialized().unwrap();
+        let sink = audio_preview_output_sink(true).unwrap();
+        assert_eq!(sink.factory().unwrap().name(), "fakesink");
+        assert!(sink.property::<bool>("sync"));
+    }
 
     #[test]
     fn preview_sink_configures_multithreading_and_single_buffer_drop() {

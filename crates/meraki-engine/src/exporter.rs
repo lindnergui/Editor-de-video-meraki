@@ -1,21 +1,17 @@
-use crate::clip_prepare::{self, PreparedSource};
+use crate::clip_prepare;
 use crate::encoding_profiles;
 use crate::export_pipeline::{build_render_pipeline, detect_active_streams, RenderSpec};
 use crate::protocol::{EngineEvent, EngineWorkerChannel, TimelineRenderClip, TrackAudioMix};
+use crate::render_monitor::{monitor_render_bus, RenderBusError};
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
-use gstreamer as gst;
-use gstreamer::prelude::*;
 use gstreamer_editing_services as ges;
-use gstreamer_editing_services::prelude::*;
 use meraki_core::{ExportJobId, ExportSettings, TrackKind};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 struct ExportTask {
     job_id: ExportJobId,
@@ -175,28 +171,24 @@ fn execute_render_inner(
             .map_err(|e| format!("falha ao criar diretório '{}': {e}", parent.display()))?;
     }
 
-    let clips = if task.settings.format.is_audio_only() {
-        task.clips.iter().filter(|c| c.track_kind != TrackKind::Overlay).cloned().collect()
-    } else {
-        task.clips
-    };
+    let audio_only = task.settings.format.is_audio_only();
+    let mut clips = task.clips;
+    if audio_only {
+        clips.retain(|clip| clip.track_kind != TrackKind::Overlay);
+    }
     if clips.is_empty() {
         return Err("nenhum clipe compatível para renderizar na timeline".to_string());
     }
 
-    let mut prepared = context
+    debug!(%job_id, clips = clips.len(), "preparando mídia para exportação");
+    let prepared = context
         .block_on(clip_prepare::prepare_clips(asset_cache, clips))
         .map_err(|e| e.to_string())?;
-    if task.settings.format.is_audio_only() {
-        prepared.retain(|item| {
-            matches!(&item.source, PreparedSource::Media { track_types, .. } if track_types.contains(ges::TrackType::AUDIO))
-        });
-        if prepared.is_empty() {
-            return Err("nenhum fluxo de áudio encontrado para exportação Apenas Áudio".to_string());
-        }
+    let tracks = detect_active_streams(&prepared, audio_only);
+    if audio_only && tracks.is_empty() {
+        return Err("nenhum fluxo de áudio encontrado para exportação Apenas Áudio".to_string());
     }
 
-    let (has_video, has_audio) = detect_active_streams(&prepared, task.settings.format.is_audio_only());
     const MAX_RENDER_ATTEMPTS: usize = 4;
 
     for attempt in 0..MAX_RENDER_ATTEMPTS {
@@ -204,12 +196,17 @@ fn execute_render_inner(
             return Err("exportação cancelada".to_string());
         }
 
-        let resolved = encoding_profiles::build_encoding_profile(&task.settings, has_video, has_audio)
-            .map_err(|e| e.to_string())?;
+        let resolved = encoding_profiles::build_encoding_profile(
+            &task.settings,
+            tracks.contains(ges::TrackType::VIDEO),
+            tracks.contains(ges::TrackType::AUDIO),
+        )
+        .map_err(|e| e.to_string())?;
         info!(
             %job_id,
             attempt = attempt + 1,
             path = %output_path.display(),
+            ?tracks,
             muxer = ?resolved.muxer,
             video_enc = ?resolved.video_encoder,
             audio_enc = ?resolved.audio_encoder,
@@ -220,8 +217,6 @@ fn execute_render_inner(
             settings: &task.settings,
             audio_tracks: task.audio_tracks.clone(),
             prepared: &prepared,
-            has_video,
-            has_audio,
             profile: &resolved.profile,
             output_path: &output_path,
             worker,
@@ -238,105 +233,9 @@ fn execute_render_inner(
                     "reexecutando renderização com encoder alternativo"
                 );
             }
-            Err(RenderBusError::HardwareEncoderFailed { detail, .. })
-            | Err(RenderBusError::Fatal(detail)) => return Err(detail),
+            Err(err) => return Err(err.to_string()),
         }
     }
 
     Err("nenhum encoder compatível concluiu a renderização".to_string())
-}
-
-enum RenderBusError {
-    HardwareEncoderFailed { encoder: String, detail: String },
-    Fatal(String),
-}
-
-fn monitor_render_bus(
-    job_id: ExportJobId,
-    pipeline: &ges::Pipeline,
-    timeline: &ges::Timeline,
-    output_path: &PathBuf,
-    cancel_flag: &AtomicBool,
-    worker: &EngineWorkerChannel,
-) -> Result<(), RenderBusError> {
-    if let Err(err) = pipeline.set_state(gst::State::Playing) {
-        let _ = pipeline.set_state(gst::State::Null);
-        return Err(RenderBusError::Fatal(format!("erro ao iniciar render: {err:?}")));
-    }
-    let Some(bus) = pipeline.bus() else {
-        let _ = pipeline.set_state(gst::State::Null);
-        return Err(RenderBusError::Fatal(
-            "barramento GStreamer indisponível para renderização".to_string(),
-        ));
-    };
-
-    let started = Instant::now();
-    let mut last_progress = Instant::now();
-    loop {
-        if cancel_flag.load(Ordering::Acquire) {
-            let _ = pipeline.send_event(gst::event::Eos::new());
-            let _ = pipeline.set_state(gst::State::Null);
-            if let Err(err) = fs::remove_file(output_path) {
-                warn!(error = %err, path = %output_path.display(), "não foi possível remover arquivo parcial cancelado");
-            }
-            worker.emit_critical(EngineEvent::ExportCancelled { job_id });
-            return Ok(());
-        }
-
-        if let Some(msg) = bus.timed_pop(Some(gst::ClockTime::from_mseconds(100))) {
-            match msg.view() {
-                gst::MessageView::Eos(_) => {
-                    let _ = pipeline.set_state(gst::State::Null);
-                    let file_size_bytes = fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
-                    worker.emit_drop_if_full(EngineEvent::ExportProgress {
-                        job_id,
-                        progress: 1.0,
-                        eta_seconds: Some(0),
-                    });
-                    worker.emit_critical(EngineEvent::ExportFinished {
-                        job_id,
-                        output_path: output_path.clone(),
-                        file_size_bytes,
-                    });
-                    return Ok(());
-                }
-                gst::MessageView::Error(err) => {
-                    let _ = pipeline.set_state(gst::State::Null);
-                    let _ = fs::remove_file(output_path);
-                    let src = err.src().map(|s| s.path_string()).unwrap_or_default();
-                    let detail = err.debug().map(|d| d.to_string()).unwrap_or_default();
-                    let msg_text = format!("erro no render ({src}): {} ({detail})", err.error());
-                    if let Some(encoder) = encoding_profiles::demote_failing_hardware_encoder(err.src()) {
-                        return Err(RenderBusError::HardwareEncoderFailed {
-                            encoder,
-                            detail: msg_text,
-                        });
-                    }
-                    return Err(RenderBusError::Fatal(msg_text));
-                }
-                _ => {}
-            }
-        }
-
-        if last_progress.elapsed() >= Duration::from_millis(100) {
-            let total_ns = pipeline
-                .query_duration::<gst::ClockTime>()
-                .map_or_else(|| timeline.duration().nseconds(), gst::ClockTime::nseconds);
-            let pos_ns = pipeline.query_position::<gst::ClockTime>().map_or(0, gst::ClockTime::nseconds);
-            let progress = if total_ns > 0 {
-                ((pos_ns as f64) / (total_ns as f64)).clamp(0.0, 0.99) as f32
-            } else {
-                0.0
-            };
-            let eta_seconds = if progress >= 0.02 {
-                let elapsed = started.elapsed().as_secs_f64();
-                let remaining = elapsed * ((1.0 - f64::from(progress)) / f64::from(progress));
-                Some(remaining.ceil().max(0.0) as u64)
-            } else {
-                None
-            };
-            worker.emit_drop_if_full(EngineEvent::ExportProgress { job_id, progress, eta_seconds });
-            last_progress = Instant::now();
-        }
-    }
 }

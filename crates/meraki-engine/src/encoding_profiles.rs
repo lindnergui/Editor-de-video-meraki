@@ -47,10 +47,10 @@ pub fn build_encoding_profile(
     include_video: bool,
     include_audio: bool,
 ) -> Result<ResolvedExportProfile, ExportProfileError> {
-    if gst::ElementFactory::find("encodebin").is_none() {
+    if gst::ElementFactory::find("encodebin2").is_none() {
         return Err(ExportProfileError::MissingEssentialPlugin {
-            role: "codificação de exportação (encodebin)",
-            candidates: "encodebin",
+            role: "codificação de exportação GES",
+            candidates: "encodebin2",
             hint: "gst-plugins-base",
         });
     }
@@ -317,6 +317,15 @@ fn build_mov_prores_profile(
     })
 }
 
+pub(crate) fn wav_pcm_caps() -> gst::Caps {
+    gst::Caps::builder("audio/x-raw")
+        .field("format", "S16LE")
+        .field("layout", "interleaved")
+        .field("rate", 48_000_i32)
+        .field("channels", 2_i32)
+        .build()
+}
+
 fn build_audio_wav_profile(include_audio: bool) -> Result<ResolvedExportProfile, ExportProfileError> {
     if !include_audio {
         return Err(ExportProfileError::NoStreamsSelected);
@@ -330,20 +339,10 @@ fn build_audio_wav_profile(include_audio: bool) -> Result<ResolvedExportProfile,
     )?;
 
     let wav_caps = gst::Caps::builder("audio/x-wav").build();
-    let pcm_caps = gst::Caps::builder("audio/x-raw")
-        .field("format", "S16LE")
-        .field("layout", "interleaved")
-        .build();
-    let a_rest = gst::Caps::builder("audio/x-raw")
-        .field("format", "S16LE")
-        .field("layout", "interleaved")
-        .field("rate", 48_000_i32)
-        .field("channels", 2_i32)
-        .build();
-
+    let pcm_caps = wav_pcm_caps();
     let audio_prof = gst_pbutils::EncodingAudioProfile::builder(&pcm_caps)
-        .restriction(&a_rest)
-        .presence(0)
+        .restriction(&pcm_caps)
+        .presence(1)
         .build();
     let container = gst_pbutils::EncodingContainerProfile::builder(&wav_caps)
         .name("meraki-wav-pcm")
@@ -378,7 +377,7 @@ fn build_audio_mp3_profile(include_audio: bool) -> Result<ResolvedExportProfile,
     let audio_prof = gst_pbutils::EncodingAudioProfile::builder(&mp3_caps)
         .name("meraki-mp3")
         .restriction(&a_rest)
-        .presence(0)
+        .presence(1)
         .build();
 
     Ok(ResolvedExportProfile {

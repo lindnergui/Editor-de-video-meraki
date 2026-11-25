@@ -1,3 +1,5 @@
+use gstreamer as gst;
+use gstreamer_pbutils as gst_pbutils;
 use meraki_core::{
     ClipId, ClipTransform, ExportFormat, ExportJobId, ExportPreset, ExportQuality,
     ExportResolution, ExportSettings, TitleOverlay, TitleStyle, TrackId, TrackKind, VoicePreset,
@@ -63,7 +65,12 @@ fn write_stereo_sine_wav(path: &Path, duration_secs: f32, freq_hz: f32) {
 }
 
 #[test]
-fn exporter_renders_real_wav_and_mp4_to_disk_and_supports_cancel_and_error_reporting() {
+fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .init();
+
     let dir = TempDirGuard::new("suite");
     let wav_in = dir.0.join("input.wav");
     write_stereo_sine_wav(&wav_in, 1.0, 440.0);
@@ -116,6 +123,13 @@ fn exporter_renders_real_wav_and_mp4_to_disk_and_supports_cancel_and_error_repor
     assert!(wav_out.is_file());
     assert!(wav_bytes > 44);
     assert_eq!(std::fs::metadata(&wav_out).unwrap().len(), wav_bytes);
+    let wav_info = discover_rendered_media(&wav_out);
+    assert!(wav_info.video_streams().is_empty());
+    let wav_audio = wav_info.audio_streams();
+    assert_eq!(wav_audio.len(), 1);
+    assert_eq!(wav_audio[0].sample_rate(), 48_000);
+    assert_eq!(wav_audio[0].channels(), 2);
+    assert_eq!(wav_audio[0].depth(), 16);
 
     // 2. Exportação real MP4 (título + áudio em 720p Leve)
     let title_clip = TimelineRenderClip {
@@ -180,6 +194,37 @@ fn exporter_renders_real_wav_and_mp4_to_disk_and_supports_cancel_and_error_repor
     assert!(mp4_out_2.is_file());
     assert!(mp4_bytes_2 > 0);
     assert_eq!(std::fs::metadata(&mp4_out_2).unwrap().len(), mp4_bytes_2);
+
+    // O render MP3 extrai o áudio do MP4 e ignora um título mais longo na timeline.
+    let mp3_job = ExportJobId::new();
+    let mut mp3_settings = ExportSettings::from_preset(ExportPreset::AudioOnly);
+    mp3_settings.format = ExportFormat::AudioMp3;
+    mp3_settings.output_dir = dir.0.clone();
+    mp3_settings.file_name = "audio_extraido".to_string();
+    let video_with_audio = TimelineRenderClip {
+        clip_id: ClipId::new(),
+        track_id: track_v,
+        path: mp4_out,
+        track_kind: TrackKind::Video,
+        volume_keyframes: Vec::new(),
+        ..audio_clip.clone()
+    };
+    let long_title = TimelineRenderClip { duration_ns: 5_000_000_000, ..title_clip };
+    handle
+        .send(EngineCommand::StartExport {
+            job_id: mp3_job,
+            settings: mp3_settings,
+            clips: vec![video_with_audio, long_title],
+            audio_tracks: Vec::new(),
+        })
+        .unwrap();
+    let (mp3_out, _) = wait_export_finished(&handle, mp3_job, "render MP3 de mídia A/V");
+    let mp3_info = discover_rendered_media(&mp3_out);
+    assert_eq!(mp3_info.audio_streams().len(), 1);
+    assert!(mp3_info.video_streams().is_empty());
+    let mp3_duration = mp3_info.duration().expect("duração do MP3 renderizado");
+    assert!(mp3_duration > gst::ClockTime::from_mseconds(800));
+    assert!(mp3_duration < gst::ClockTime::from_seconds(2));
 
     // 3. Cancelamento limpo de job na fila (atrás do primeiro job curto)
     let blocker_job = ExportJobId::new();
@@ -251,12 +296,21 @@ fn exporter_renders_real_wav_and_mp4_to_disk_and_supports_cancel_and_error_repor
     handle.send(EngineCommand::Shutdown).unwrap();
 }
 
+fn discover_rendered_media(path: &Path) -> gst_pbutils::DiscovererInfo {
+    let uri = glib::filename_to_uri(path, None).expect("URI do arquivo renderizado");
+    gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(5))
+        .expect("descobridor para mídia renderizada")
+        .discover_uri(&uri)
+        .expect("metadados da mídia renderizada")
+}
+
 fn wait_export_finished(
     handle: &meraki_engine::EngineHandle,
     target_job: ExportJobId,
     phase: &str,
 ) -> (PathBuf, u64) {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last_progress = None;
     while Instant::now() < deadline {
         if let Ok(event) = handle.events().recv_timeout(Duration::from_millis(100)) {
             match event {
@@ -269,9 +323,13 @@ fn wait_export_finished(
                 EngineEvent::ExportCancelled { job_id } if job_id == target_job => {
                     panic!("cancelamento inesperado em {phase}");
                 }
+                EngineEvent::ExportProgress { job_id, progress, .. } if job_id == target_job => {
+                    last_progress = Some(progress);
+                }
+                EngineEvent::Error(error) => panic!("erro do motor durante {phase}: {error}"),
                 _ => {}
             }
         }
     }
-    panic!("timeout aguardando ExportFinished em {phase}");
+    panic!("timeout aguardando ExportFinished em {phase} ({target_job}); último progresso: {last_progress:?}");
 }
