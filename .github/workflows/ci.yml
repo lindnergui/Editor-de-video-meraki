@@ -63,18 +63,56 @@ jobs:
           $dev = Join-Path $env:RUNNER_TEMP "gst-dev.msi"
           curl.exe -fsSL "$base/gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi" -o $rt
           curl.exe -fsSL "$base/gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi" -o $dev
-          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$rt`" /qn /norestart INSTALLDIR=C:\gstreamer"
-          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$dev`" /qn /norestart INSTALLDIR=C:\gstreamer"
-          $gstRoot = [Environment]::GetEnvironmentVariable("GSTREAMER_1_0_ROOT_MSVC_X86_64", "Machine")
-          if (-not $gstRoot -or -not (Test-Path $gstRoot)) {
-            $gstRoot = "C:\gstreamer\1.0\msvc_x86_64"
+          foreach ($msi in @($rt, $dev)) {
+            $proc = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/i `"$msi`" /qn /norestart ADDLOCAL=ALL INSTALLDIR=C:\gstreamer"
+            if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+              throw "Falha ao instalar $msi (msiexec exit code $($proc.ExitCode))"
+            }
           }
-          if (-not (Test-Path $gstRoot)) {
-            throw "GStreamer MSVC não encontrado em $gstRoot"
+          $gstRoot = @(
+            [Environment]::GetEnvironmentVariable("GSTREAMER_1_0_ROOT_MSVC_X86_64", "Machine"),
+            "C:\gstreamer\1.0\msvc_x86_64",
+            "C:\Program Files\gstreamer\1.0\msvc_x86_64"
+          ) | Where-Object { $_ -and (Test-Path $_ -PathType Container) } | Select-Object -First 1
+          if (-not $gstRoot) {
+            throw "GStreamer MSVC x86_64 não encontrado após instalação"
           }
+          $gstRoot = $gstRoot.TrimEnd('\')
+          $pkgCfgDir = "$gstRoot\lib\pkgconfig"
+          $libDir = "$gstRoot\lib"
+          $binDir = "$gstRoot\bin"
+          $newPkgCfgPath = if ($env:PKG_CONFIG_PATH) { "$pkgCfgDir;$env:PKG_CONFIG_PATH" } else { $pkgCfgDir }
+          $newLib = if ($env:LIB) { "$libDir;$env:LIB" } else { $libDir }
           "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gstRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "PKG_CONFIG_PATH=$gstRoot\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "$gstRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "PKG_CONFIG_PATH=$newPkgCfgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LIB=$newLib" | Out-File -FilePath $env:GITHUB_ENV -Append
+          if (Test-Path "$binDir\pkg-config.exe" -PathType Leaf) {
+            "PKG_CONFIG=$binDir\pkg-config.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+          "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Validar GStreamer e GES via pkg-config
+        shell: pwsh
+        run: |
+          $pcPath = Join-Path $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 "lib\pkgconfig\gst-editing-services-1.0.pc"
+          if (-not (Test-Path $pcPath -PathType Leaf)) {
+            throw "Arquivo .pc do GES não encontrado em: $pcPath"
+          }
+          $pkgCfgBin = if ($env:PKG_CONFIG -and (Test-Path $env:PKG_CONFIG -PathType Leaf)) {
+            $env:PKG_CONFIG
+          } else {
+            $cmd = Get-Command pkg-config -ErrorAction SilentlyContinue
+            if (-not $cmd) { throw "pkg-config não encontrado no PATH" }
+            $cmd.Source
+          }
+          Write-Host "GSTREAMER_1_0_ROOT_MSVC_X86_64=$env:GSTREAMER_1_0_ROOT_MSVC_X86_64"
+          Write-Host "PKG_CONFIG=$pkgCfgBin"
+          Write-Host "PKG_CONFIG_PATH=$env:PKG_CONFIG_PATH"
+          Write-Host "LIB=$env:LIB"
+          & $pkgCfgBin --modversion gstreamer-1.0 gst-editing-services-1.0
+          if ($LASTEXITCODE -ne 0) {
+            throw "pkg-config falhou ao resolver gstreamer-1.0 / gst-editing-services-1.0 (exit $LASTEXITCODE)"
+          }
 
       - name: Instalar Rust stable + clippy
         uses: dtolnay/rust-toolchain@stable
