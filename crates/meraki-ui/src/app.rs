@@ -1,8 +1,13 @@
 use crate::app_delivery::{DeliveryMessage, DeliveryState};
+use crate::app_exit_guard::{ExitGuardMessage, PendingExitAction};
+use crate::app_precision::PrecisionMessage;
+use crate::app_preferences::preferences_path;
 use crate::app_project_io::{ProjectIoMessage, ProjectIoState};
+use crate::app_screens::{AppScreen, ScreenMessage, ScreenState};
 use crate::layout::{sidebar, topbar};
 use crate::navigation::WorkspaceTab;
 use crate::playback::{self, PlaybackMessage, PlaybackState};
+use crate::project_storage::internal_projects_dir;
 use crate::views::audio::{self, AudioMessage, AudioState};
 use crate::views::delivery;
 use crate::views::edit::{self, EditMessage, EditState};
@@ -12,8 +17,8 @@ use crate::{subscription, theme};
 use iced::widget::{column, container, horizontal_rule, image, row, vertical_rule};
 use iced::{Element, Length, Subscription, Task, Theme};
 use meraki_core::{
-    AddAssetCommand, AddClipCommand, AssetId, ClipId, ClipTransform, Command, FolderId,
-    HistoryError, HistoryStack, MediaAsset, MoveClipCommand, PreviewQuality, Project,
+    AddAssetCommand, AddClipCommand, AppPreferences, AssetId, ClipId, ClipTransform, Command,
+    FolderId, HistoryError, HistoryStack, MediaAsset, MoveClipCommand, PreviewQuality, Project,
     RemoveClipCommand, SplitClipCommand, TrackId, TrimClipCommand, UpdateClipTransformCommand,
 };
 use meraki_engine::{BridgeError, EngineCommand, EngineEvent, EngineHandle};
@@ -39,6 +44,14 @@ pub enum Message {
     Delivery(DeliveryMessage),
     /// Ações de abertura, salvamento e renomeação do arquivo `.meraki`.
     ProjectIo(ProjectIoMessage),
+    /// Edição precisa na agulha, ferramentas e navegação quadro a quadro.
+    Precision(PrecisionMessage),
+    /// Navegação entre telas v0.2.0 (`ProjectHub`, `KeymapWelcome` e `Editor`).
+    Screen(ScreenMessage),
+    /// Pedido de fechamento nativo da janela interceptado pela guarda de alterações.
+    WindowCloseRequested(iced::window::Id),
+    /// Ação do modal de confirmação ao sair com alterações não salvas.
+    ExitGuard(ExitGuardMessage),
     /// Comandos de reprodução, atalhos de teclado e edição na timeline.
     Playback(PlaybackMessage),
     /// Evento assíncrono emitido pelo motor multimídia.
@@ -57,6 +70,11 @@ pub struct MerakiApp {
     pub(crate) audio: AudioState,
     pub(crate) delivery: DeliveryState,
     pub(crate) project_io: ProjectIoState,
+    pub preferences: AppPreferences,
+    pub(crate) preferences_path: PathBuf,
+    pub(crate) projects_dir: PathBuf,
+    pub(crate) pending_exit: Option<PendingExitAction>,
+    pub(crate) screens: ScreenState,
     pub(crate) playback: PlaybackState,
     pub(crate) engine_ready: bool,
     pub(crate) last_error: Option<String>,
@@ -68,22 +86,7 @@ impl MerakiApp {
     }
 
     pub fn with_project(engine: EngineHandle, project: Project) -> Self {
-        let playback = PlaybackState::with_preview_quality(project.preview_quality);
-        Self {
-            engine,
-            project,
-            history: HistoryStack::new(),
-            active_tab: WorkspaceTab::Files,
-            files: FilesState::default(),
-            edit: EditState::default(),
-            effects: EffectsState::default(),
-            audio: AudioState::default(),
-            delivery: DeliveryState::default(),
-            project_io: ProjectIoState::default(),
-            playback,
-            engine_ready: false,
-            last_error: None,
-        }
+        Self::with_storage_paths(engine, project, preferences_path(), internal_projects_dir())
     }
 
     pub fn project(&self) -> &Project { &self.project }
@@ -248,13 +251,18 @@ impl MerakiApp {
     pub fn theme(&self) -> Theme { theme::meraki_theme() }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
+        let mut subs = vec![
             subscription::engine_events(&self.engine).map(Message::EngineEvent),
-            subscription::keyboard_shortcuts().map(Message::Playback),
-            subscription::project_io_shortcuts().map(Message::ProjectIo),
-            iced::time::every(std::time::Duration::from_secs(60))
-                .map(|_| Message::ProjectIo(ProjectIoMessage::AutoSaveTick)),
-        ])
+            subscription::window_close_requests(),
+        ];
+        if self.screens.screen == AppScreen::Editor {
+            subs.push(subscription::keyboard_shortcuts(self.preferences.keymap));
+            subs.push(
+                iced::time::every(std::time::Duration::from_secs(60))
+                    .map(|_| Message::ProjectIo(ProjectIoMessage::AutoSaveTick)),
+            );
+        }
+        Subscription::batch(subs)
     }
 
     /// Processa eventos de interação da interface sem bloquear a thread de UI.
@@ -284,6 +292,15 @@ impl MerakiApp {
             Message::Audio(msg) => self.handle_audio_message(msg),
             Message::Delivery(msg) => self.handle_delivery_message(msg),
             Message::ProjectIo(msg) => self.handle_project_io_message(msg),
+            Message::Precision(msg) => {
+                self.handle_precision_message(msg);
+                Task::none()
+            }
+            Message::Screen(msg) => self.handle_screen_message(msg),
+            Message::WindowCloseRequested(id) => {
+                self.request_exit_action(PendingExitAction::CloseWindow(id))
+            }
+            Message::ExitGuard(msg) => self.handle_exit_guard_message(msg),
             Message::Playback(msg) => {
                 self.handle_playback_message(msg);
                 Task::none()
@@ -321,28 +338,6 @@ impl MerakiApp {
         }
     }
 
-    pub(crate) fn handle_playback_message(&mut self, message: PlaybackMessage) {
-        match message {
-            PlaybackMessage::DeleteSelectedClip => {
-                if let Some(clip_id) = self.playback.selected_clip_id {
-                    let _ = self.remove_clip(clip_id);
-                }
-            }
-            PlaybackMessage::Undo => { let _ = self.undo(); }
-            PlaybackMessage::Redo => { let _ = self.redo(); }
-            other => {
-                if let Err(err) = playback::apply_transport_or_selection(
-                    &mut self.playback,
-                    &mut self.project,
-                    &self.engine,
-                    other,
-                ) {
-                    self.last_error = Some(err);
-                }
-            }
-        }
-    }
-
     fn handle_engine_event(&mut self, event: EngineEvent) {
         match event {
             EngineEvent::ExportProgress { .. }
@@ -362,27 +357,27 @@ impl MerakiApp {
         }
     }
 
-    /// Monta o layout principal: barra superior + sidebar esquerda fixa + área de trabalho.
+    /// Renderiza a tela ativa (`ProjectHub`, `KeymapWelcome` ou `Editor`).
     pub fn view(&self) -> Element<'_, Message> {
+        self.render_current_screen()
+    }
+
+    pub(crate) fn view_editor(&self) -> Element<'_, Message> {
         let is_delivery = self.active_tab == WorkspaceTab::Delivery;
-        let top = topbar::view(&self.project.name, &self.project_io, is_delivery);
+        let profile = self.preferences.keymap;
+        let top = topbar::view(
+            &self.project.name,
+            &self.project_io,
+            self.screens.settings_menu_open,
+            is_delivery,
+        );
         let left_nav = sidebar::view(self.active_tab);
         let main_area = match self.active_tab {
             WorkspaceTab::Files => files::view(&self.project, &self.files, &self.project_io).map(Message::Files),
-            WorkspaceTab::Edit => {
-                edit::view(&self.project, &self.playback, &self.history, &self.edit, &self.project_io).map(Message::Edit)
-            }
-            WorkspaceTab::Effects => {
-                effects::view(&self.project, &self.playback, &self.history, &self.effects)
-                    .map(Message::Effects)
-            }
-            WorkspaceTab::Audio => {
-                audio::view(&self.project, &self.playback, &self.history, &self.audio)
-                    .map(Message::Audio)
-            }
-            WorkspaceTab::Delivery => {
-                delivery::view(&self.project, &self.playback, &self.delivery).map(Message::Delivery)
-            }
+            WorkspaceTab::Edit => edit::view(&self.project, &self.playback, &self.history, &self.edit, &self.project_io, profile).map(Message::Edit),
+            WorkspaceTab::Effects => effects::view(&self.project, &self.playback, &self.history, &self.effects, profile).map(Message::Effects),
+            WorkspaceTab::Audio => audio::view(&self.project, &self.playback, &self.history, &self.audio, profile).map(Message::Audio),
+            WorkspaceTab::Delivery => delivery::view(&self.project, &self.playback, &self.delivery).map(Message::Delivery),
         };
         let body = row![left_nav, vertical_rule(1).style(theme::divider), main_area]
             .width(Length::Fill)
@@ -390,6 +385,7 @@ impl MerakiApp {
         let root = column![top, horizontal_rule(1).style(theme::divider), body]
             .width(Length::Fill)
             .height(Length::Fill);
-        container(root).width(Length::Fill).height(Length::Fill).style(theme::base_canvas).into()
+        let editor = container(root).width(Length::Fill).height(Length::Fill).style(theme::base_canvas).into();
+        self.wrap_with_editor_overlays(editor)
     }
 }

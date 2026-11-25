@@ -45,7 +45,9 @@ modules:
       - install -Dm755 target/release/meraki-app /app/bin/meraki
       - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.desktop /app/share/applications/io.github.lindnergui.Meraki.desktop
       - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.metainfo.xml /app/share/metainfo/io.github.lindnergui.Meraki.metainfo.xml
-      - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.svg /app/share/icons/hicolor/scalable/apps/io.github.lindnergui.Meraki.svg
+      - install -Dm644 packaging/flatpak/icons/128x128/io.github.lindnergui.Meraki.png /app/share/icons/hicolor/128x128/apps/io.github.lindnergui.Meraki.png
+      - install -Dm644 packaging/flatpak/icons/256x256/io.github.lindnergui.Meraki.png /app/share/icons/hicolor/256x256/apps/io.github.lindnergui.Meraki.png
+      - install -Dm644 packaging/flatpak/icons/512x512/io.github.lindnergui.Meraki.png /app/share/icons/hicolor/512x512/apps/io.github.lindnergui.Meraki.png
       - install -Dm644 packaging/flatpak/io.github.lindnergui.Meraki.mime.xml /app/share/mime/packages/io.github.lindnergui.Meraki.xml
     sources:
       - type: dir

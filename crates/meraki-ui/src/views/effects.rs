@@ -11,7 +11,8 @@ use crate::theme;
 use iced::widget::{column, container, horizontal_rule, row, vertical_rule};
 use iced::{Element, Length};
 use meraki_core::{
-    ClipId, ClipTransform, HistoryStack, KeyframeEasing, KeyframeProperty, Project, TrackKind,
+    ClipId, ClipTransform, HistoryStack, KeyframeEasing, KeyframeProperty, KeymapProfile, Project,
+    TrackKind,
 };
 
 /// Estado local da aba Efeitos (biblioteca, timeline, texto temporário e easing ativo).
@@ -76,6 +77,9 @@ impl EffectsState {
             }
             EffectsMessage::Timeline(TimelineCanvasMessage::ZoomIn) => self.timeline.zoom_in(),
             EffectsMessage::Timeline(TimelineCanvasMessage::ZoomOut) => self.timeline.zoom_out(),
+            EffectsMessage::Timeline(TimelineCanvasMessage::ZoomAnchored { factor, anchor_ns }) => {
+                self.timeline.zoom_anchored_at(*factor, *anchor_ns);
+            }
             _ => return false,
         }
         true
@@ -104,6 +108,7 @@ pub fn view<'a>(
     playback: &'a PlaybackState,
     history: &'a HistoryStack,
     state: &'a EffectsState,
+    profile: KeymapProfile,
 ) -> Element<'a, EffectsMessage> {
     let selected_clip = playback
         .selected_clip_id
@@ -116,6 +121,7 @@ pub fn view<'a>(
         playback,
         history.can_undo(),
         history.can_redo(),
+        profile,
         EffectsMessage::Player,
         overlay,
     );
@@ -156,7 +162,7 @@ pub fn view<'a>(
     .height(Length::FillPortion(66));
 
     let bottom_timeline = container(
-        timeline_canvas::view_with_options(project, playback, &state.timeline, true)
+        timeline_canvas::view_with_options(project, playback, &state.timeline, profile, true)
             .map(EffectsMessage::Timeline),
     )
     .width(Length::Fill)

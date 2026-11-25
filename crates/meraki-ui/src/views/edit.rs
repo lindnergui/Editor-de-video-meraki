@@ -13,7 +13,7 @@ use iced::widget::{
     text_input, vertical_rule, Column, Row,
 };
 use iced::{Element, Length};
-use meraki_core::{AssetId, ClipId, ClipTransform, FolderId, HistoryStack, MediaAsset, Project};
+use meraki_core::{AssetId, ClipId, ClipTransform, FolderId, HistoryStack, KeymapProfile, MediaAsset, Project};
 
 /// Estado local da aba Edição (gaveta compacta de mídia, rascunho e ferramentas/zoom da timeline).
 #[derive(Debug, Clone, Default)]
@@ -48,6 +48,9 @@ impl EditState {
             }
             EditMessage::Timeline(TimelineCanvasMessage::ZoomIn) => self.timeline.zoom_in(),
             EditMessage::Timeline(TimelineCanvasMessage::ZoomOut) => self.timeline.zoom_out(),
+            EditMessage::Timeline(TimelineCanvasMessage::ZoomAnchored { factor, anchor_ns }) => {
+                self.timeline.zoom_anchored_at(*factor, *anchor_ns);
+            }
             _ => return false,
         }
         true
@@ -61,9 +64,10 @@ pub fn view<'a>(
     history: &'a HistoryStack,
     state: &'a EditState,
     project_io: &'a ProjectIoState,
+    profile: KeymapProfile,
 ) -> Element<'a, EditMessage> {
     let media_drawer = media_drawer_column(project, state, project_io);
-    let player_panel = player::view(project, playback, history.can_undo(), history.can_redo())
+    let player_panel = player::view(project, playback, history.can_undo(), history.can_redo(), profile)
         .map(EditMessage::Player);
     let inspector_panel = inspector::view(project, playback.selected_clip_id, state.transform_draft)
         .map(EditMessage::Inspector);
@@ -83,7 +87,7 @@ pub fn view<'a>(
     .height(Length::FillPortion(66));
 
     let bottom_timeline = container(
-        timeline_canvas::view(project, playback, &state.timeline).map(EditMessage::Timeline),
+        timeline_canvas::view(project, playback, &state.timeline, profile).map(EditMessage::Timeline),
     )
     .width(Length::Fill)
     .height(Length::FillPortion(34));

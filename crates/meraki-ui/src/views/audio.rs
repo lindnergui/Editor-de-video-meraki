@@ -8,7 +8,7 @@ use crate::playback::PlaybackState;
 use crate::theme;
 use iced::widget::{column, container, horizontal_rule, row, vertical_rule};
 use iced::{Element, Length};
-use meraki_core::{HistoryStack, Project, Track, TrackAudioSettings, TrackId, TrackKind};
+use meraki_core::{HistoryStack, KeymapProfile, Project, Track, TrackAudioSettings, TrackId, TrackKind};
 use std::path::PathBuf;
 
 /// Estado local da aba Áudio (busca, trilha selecionada e snapshots de arraste).
@@ -62,6 +62,7 @@ pub fn view<'a>(
     playback: &'a PlaybackState,
     history: &'a HistoryStack,
     state: &'a AudioState,
+    profile: KeymapProfile,
 ) -> Element<'a, AudioMessage> {
     let audio_tracks: Vec<&Track> =
         project.timeline.tracks.iter().filter(|t| t.kind == TrackKind::Audio).collect();
@@ -79,6 +80,7 @@ pub fn view<'a>(
         playback,
         history.can_undo(),
         history.can_redo(),
+        profile,
         AudioMessage::Player,
     ))
     .width(Length::FillPortion(34))

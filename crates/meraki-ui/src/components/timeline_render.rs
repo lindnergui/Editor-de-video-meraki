@@ -1,52 +1,15 @@
 use crate::components::timeline_canvas::TimelineCanvasMessage;
 use crate::components::timeline_math::{
     display_tracks_ordered, format_ruler_label, ruler_step_secs, time_ns_to_x, x_to_time_ns,
-    DisplayTrack, TimelineTool, TimelineViewState, CLIP_RADIUS, RULER_HEIGHT, TRACK_HEIGHT,
-    TRACK_STRIDE,
+    DisplayTrack, CLIP_RADIUS, RULER_HEIGHT, TRACK_HEIGHT, TRACK_STRIDE,
 };
 use crate::{icons, theme};
-use iced::alignment::{Horizontal, Vertical};
+use iced::alignment::Vertical;
 use iced::border;
 use iced::widget::canvas::{Frame, Path, Stroke, Text};
-use iced::widget::{button, column, container, horizontal_rule, row, text, Column};
+use iced::widget::{container, horizontal_rule, row, text, Column};
 use iced::{Color, Element, Length, Pixels, Point, Size};
 use meraki_core::{Clip, ClipId, Project, TrackKind};
-
-pub(crate) fn build_toolbar<'a>(view_state: &TimelineViewState) -> Element<'a, TimelineCanvasMessage> {
-    let select_active = view_state.tool == TimelineTool::Select;
-    let razor_active = view_state.tool == TimelineTool::Razor;
-
-    container(
-        column![
-            tool_btn(icons::TOOL_SELECT, select_active, TimelineCanvasMessage::SetTool(TimelineTool::Select)),
-            tool_btn(icons::TOOL_RAZOR, razor_active, TimelineCanvasMessage::SetTool(TimelineTool::Razor)),
-            tool_btn(icons::TOOL_SNAP, view_state.snap_enabled, TimelineCanvasMessage::ToggleSnap),
-            horizontal_rule(1).style(theme::divider),
-            tool_btn(icons::ZOOM_IN, false, TimelineCanvasMessage::ZoomIn),
-            tool_btn(icons::ZOOM_OUT, false, TimelineCanvasMessage::ZoomOut),
-        ]
-        .spacing(6)
-        .align_x(Horizontal::Center),
-    )
-    .width(42)
-    .height(Length::Fill)
-    .padding([8, 4])
-    .style(theme::sidebar)
-    .into()
-}
-
-fn tool_btn<'a>(
-    svg_bytes: &'static [u8],
-    active: bool,
-    msg: TimelineCanvasMessage,
-) -> Element<'a, TimelineCanvasMessage> {
-    let tint = if active { theme::TEXT_ON_ACCENT } else { theme::TEXT_SECONDARY };
-    button(icons::icon(svg_bytes, 14.0, tint))
-        .padding(7)
-        .style(theme::filter_pill_button(active))
-        .on_press(msg)
-        .into()
-}
 
 pub(crate) fn build_track_headers<'a>(
     tracks: &[DisplayTrack<'a>],

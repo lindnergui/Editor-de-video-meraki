@@ -1,4 +1,6 @@
 use crate::app::{MerakiApp, Message};
+use crate::app_exit_guard::PendingExitAction;
+use crate::project_storage::managed_project_path_in;
 use iced::keyboard::key::Key;
 use iced::keyboard::Modifiers;
 use iced::widget::image;
@@ -85,7 +87,7 @@ async fn pick_save_project_file(suggested_name: String) -> Option<PathBuf> {
         suggested_name.trim().to_string()
     };
     let file = rfd::AsyncFileDialog::new()
-        .set_title("Salvar Projeto Meraki")
+        .set_title("Exportar Cópia do Projeto (.meraki)")
         .set_file_name(format!("{safe_stem}.meraki"))
         .add_filter("Projeto Meraki", &["meraki"])
         .save_file()
@@ -93,7 +95,7 @@ async fn pick_save_project_file(suggested_name: String) -> Option<PathBuf> {
     Some(ensure_meraki_extension(file.path().to_path_buf()))
 }
 
-async fn pick_open_project_file() -> Option<PathBuf> {
+pub(crate) async fn pick_open_project_file() -> Option<PathBuf> {
     let file = rfd::AsyncFileDialog::new()
         .set_title("Abrir Projeto Meraki")
         .add_filter("Projeto Meraki", &["meraki"])
@@ -102,7 +104,7 @@ async fn pick_open_project_file() -> Option<PathBuf> {
     Some(file.path().to_path_buf())
 }
 
-fn short_file_label(path: &Path) -> String {
+pub(crate) fn short_file_label(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(str::to_string)
@@ -171,6 +173,7 @@ impl MerakiApp {
         self.project_io.autosave_dirty = false;
         self.project_io.last_saved_label = Some(label);
         self.last_error = None;
+        self.record_recent_project(self.project.name.clone(), path.clone());
         info!(path = %path.display(), "projeto salvo com sucesso");
         Ok(path)
     }
@@ -240,6 +243,8 @@ impl MerakiApp {
             self.last_error = Some(warning);
         }
 
+        self.record_recent_project(self.project.name.clone(), path.to_path_buf());
+        self.screens.screen = crate::app_screens::AppScreen::Editor;
         info!(path = %path.display(), missing = missing_paths.len(), "projeto carregado");
         Ok(missing_paths)
     }
@@ -257,28 +262,31 @@ impl MerakiApp {
         Ok(true)
     }
 
+    /// Salva o projeto no caminho atual ou, se ausente, cria na pasta interna sem abrir diálogo.
+    pub fn save_current_project(&mut self) -> Result<PathBuf, String> {
+        let target = self
+            .project_io
+            .project_file_path
+            .clone()
+            .unwrap_or_else(|| managed_project_path_in(&self.projects_dir, self.project.id));
+        self.save_project_to_path(target)
+    }
+
     pub(crate) fn handle_project_io_message(&mut self, msg: ProjectIoMessage) -> Task<Message> {
         match msg {
             ProjectIoMessage::Save => {
-                if let Some(existing) = self.project_io.project_file_path.clone() {
-                    if let Err(err) = self.save_project_to_path(existing) {
-                        self.last_error = Some(err);
-                    }
-                    Task::none()
-                } else {
-                    Task::perform(
-                        pick_save_project_file(self.project.name.clone()),
-                        |path| Message::ProjectIo(ProjectIoMessage::SavePathChosen(path)),
-                    )
+                if let Err(err) = self.save_current_project() {
+                    self.last_error = Some(err);
                 }
+                Task::none()
             }
             ProjectIoMessage::SaveAs => Task::perform(
                 pick_save_project_file(self.project.name.clone()),
                 |path| Message::ProjectIo(ProjectIoMessage::SavePathChosen(path)),
             ),
-            ProjectIoMessage::Open => Task::perform(pick_open_project_file(), |path| {
-                Message::ProjectIo(ProjectIoMessage::OpenPathChosen(path))
-            }),
+            ProjectIoMessage::Open => {
+                self.request_exit_action(PendingExitAction::OpenExternalProjectDialog)
+            }
             ProjectIoMessage::SavePathChosen(Some(path)) => {
                 if let Err(err) = self.save_project_to_path(path) {
                     self.last_error = Some(err);

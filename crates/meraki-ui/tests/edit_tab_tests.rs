@@ -159,8 +159,8 @@ fn edit_tab_actions_update_state_history_and_engine_sync() {
     assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
 
     let _ = app.update(Message::Edit(EditMessage::Player(PlayerMessage::StepForward)));
-    assert_eq!(app.playhead_ns(), 1_000_000_000);
-    assert_eq!(worker.take_pending_seek(), Some(1_000_000_000));
+    assert_eq!(app.playhead_ns(), 1_000_000_000 / 30);
+    assert_eq!(worker.take_pending_seek(), Some(1_000_000_000 / 30));
 
     let _ = app.update(Message::Edit(EditMessage::Player(PlayerMessage::StepBack)));
     assert_eq!(app.playhead_ns(), 0);

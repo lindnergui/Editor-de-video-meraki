@@ -24,6 +24,7 @@ fn save_and_open_meraki_roundtrip_restores_project_and_warns_missing_media() {
 
     let (engine, _worker) = create_engine_channel();
     let mut app = MerakiApp::new(engine);
+    app.set_preferences_path(dir.join("prefs.json"));
 
     let existing_id = app.import_media(existing_video.clone(), None, true).ok();
     let _missing_id = app.import_media(missing_video.clone(), None, false).ok();
@@ -44,6 +45,7 @@ fn save_and_open_meraki_roundtrip_restores_project_and_warns_missing_media() {
 
     let (engine2, worker2) = create_engine_channel();
     let mut reopened = MerakiApp::new(engine2);
+    reopened.set_preferences_path(dir.join("prefs.json"));
     let missing = reopened
         .open_project_from_path(&saved_path)
         .unwrap_or_else(|e| panic!("falha ao abrir: {e}"));
@@ -82,6 +84,7 @@ fn dirty_flag_and_autosave_backup_clear_autosave_dirty_until_next_edit() {
     let dir = temp_test_dir("meraki-dirty");
     let (engine, _worker) = create_engine_channel();
     let mut app = MerakiApp::new(engine);
+    app.set_preferences_path(dir.join("prefs.json"));
 
     assert!(!app.project_io().is_dirty);
     assert!(app.rename_project("Rascunho Auto".to_string()).is_ok());

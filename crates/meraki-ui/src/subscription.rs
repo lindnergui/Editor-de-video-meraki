@@ -1,8 +1,13 @@
-use crate::app_project_io::{map_project_shortcut, ProjectIoMessage};
-use crate::playback::{map_keyboard_shortcut, PlaybackMessage};
+use crate::app::Message;
+use crate::app_precision::PrecisionMessage;
+use crate::app_project_io::ProjectIoMessage;
+use crate::playback::PlaybackMessage;
 use iced::futures::sink::SinkExt;
 use iced::futures::Stream;
+use iced::keyboard::key::Named;
+use iced::keyboard::{Key, Modifiers};
 use iced::{keyboard, stream, Subscription};
+use meraki_core::KeymapProfile;
 use meraki_engine::{EngineEvent, EngineHandle};
 use std::any::TypeId;
 use std::thread;
@@ -15,14 +20,158 @@ pub fn engine_events(engine: &EngineHandle) -> Subscription<EngineEvent> {
     Subscription::run_with_id(TypeId::of::<EngineEventBridge>(), engine_events_stream(engine))
 }
 
-/// Assinatura global de atalhos de teclado (disparada somente fora de campos `text_input` focados).
-pub fn keyboard_shortcuts() -> Subscription<PlaybackMessage> {
-    keyboard::on_key_press(map_keyboard_shortcut)
+/// Traduz atalhos globais de teclado respeitando o `KeymapProfile` ativo.
+pub fn map_keyboard_shortcut(
+    profile: KeymapProfile,
+    key: Key,
+    modifiers: Modifiers,
+) -> Option<Message> {
+    if modifiers.alt() {
+        return None;
+    }
+
+    let primary = modifiers.control() || modifiers.command();
+    if primary {
+        if let Key::Character(ch) = key.as_ref() {
+            if ch.eq_ignore_ascii_case("s") {
+                return Some(Message::ProjectIo(if modifiers.shift() {
+                    ProjectIoMessage::SaveAs
+                } else {
+                    ProjectIoMessage::Save
+                }));
+            }
+            if ch.eq_ignore_ascii_case("o") && !modifiers.shift() {
+                return Some(Message::ProjectIo(ProjectIoMessage::Open));
+            }
+            if ch.eq_ignore_ascii_case("z") {
+                return Some(Message::Playback(if modifiers.shift() {
+                    PlaybackMessage::Redo
+                } else {
+                    PlaybackMessage::Undo
+                }));
+            }
+            if ch.eq_ignore_ascii_case("y")
+                && !modifiers.shift()
+                && profile == KeymapProfile::VegasPro
+            {
+                return Some(Message::Playback(PlaybackMessage::Redo));
+            }
+            if ch.eq_ignore_ascii_case("k")
+                && !modifiers.shift()
+                && profile == KeymapProfile::PremierePro
+            {
+                return Some(Message::Precision(PrecisionMessage::SplitAtPlayhead));
+            }
+            if ch.eq_ignore_ascii_case("b")
+                && !modifiers.shift()
+                && matches!(
+                    profile,
+                    KeymapProfile::DaVinciResolve | KeymapProfile::CapCut
+                )
+            {
+                return Some(Message::Precision(PrecisionMessage::SplitAtPlayhead));
+            }
+        }
+        return None;
+    }
+
+    match key.as_ref() {
+        Key::Named(Named::ArrowLeft) => {
+            return Some(Message::Precision(if modifiers.shift() {
+                PrecisionMessage::StepSeconds(-1)
+            } else {
+                PrecisionMessage::StepFrames(-1)
+            }));
+        }
+        Key::Named(Named::ArrowRight) => {
+            return Some(Message::Precision(if modifiers.shift() {
+                PrecisionMessage::StepSeconds(1)
+            } else {
+                PrecisionMessage::StepFrames(1)
+            }));
+        }
+        _ => {}
+    }
+
+    if modifiers.shift() {
+        return None;
+    }
+
+    match key.as_ref() {
+        Key::Named(Named::Space) | Key::Character(" ") => {
+            Some(Message::Playback(PlaybackMessage::TogglePlayPause))
+        }
+        Key::Named(Named::Delete | Named::Backspace) => {
+            Some(Message::Playback(PlaybackMessage::DeleteSelectedClip))
+        }
+        Key::Named(Named::F8) if profile == KeymapProfile::VegasPro => {
+            Some(Message::Precision(PrecisionMessage::ToggleSnap))
+        }
+        Key::Character(ch) => map_unmodified_char_shortcut(profile, ch),
+        _ => None,
+    }
 }
 
-/// Assinatura global de atalhos de projeto (`Ctrl+S`, `Ctrl+Shift+S`, `Ctrl+O`).
-pub fn project_io_shortcuts() -> Subscription<ProjectIoMessage> {
-    keyboard::on_key_press(map_project_shortcut)
+fn map_unmodified_char_shortcut(profile: KeymapProfile, ch: &str) -> Option<Message> {
+    let msg = match profile {
+        KeymapProfile::PremierePro => {
+            if ch.eq_ignore_ascii_case("v") {
+                PrecisionMessage::SelectTool
+            } else if ch.eq_ignore_ascii_case("s") {
+                PrecisionMessage::ToggleSnap
+            } else {
+                return None;
+            }
+        }
+        KeymapProfile::DaVinciResolve | KeymapProfile::CapCut => {
+            if ch.eq_ignore_ascii_case("a") {
+                PrecisionMessage::SelectTool
+            } else if ch.eq_ignore_ascii_case("n") {
+                PrecisionMessage::ToggleSnap
+            } else {
+                return None;
+            }
+        }
+        KeymapProfile::VegasPro => {
+            if ch.eq_ignore_ascii_case("s") {
+                PrecisionMessage::SplitAtPlayhead
+            } else if ch.eq_ignore_ascii_case("d") {
+                PrecisionMessage::SelectTool
+            } else {
+                return None;
+            }
+        }
+    };
+    Some(Message::Precision(msg))
+}
+
+fn map_premiere(key: Key, modifiers: Modifiers) -> Option<Message> {
+    map_keyboard_shortcut(KeymapProfile::PremierePro, key, modifiers)
+}
+fn map_davinci(key: Key, modifiers: Modifiers) -> Option<Message> {
+    map_keyboard_shortcut(KeymapProfile::DaVinciResolve, key, modifiers)
+}
+fn map_capcut(key: Key, modifiers: Modifiers) -> Option<Message> {
+    map_keyboard_shortcut(KeymapProfile::CapCut, key, modifiers)
+}
+fn map_vegas(key: Key, modifiers: Modifiers) -> Option<Message> {
+    map_keyboard_shortcut(KeymapProfile::VegasPro, key, modifiers)
+}
+
+/// Assinatura para interceptar pedidos de fechamento da janela antes do encerramento imediato.
+pub fn window_close_requests() -> Subscription<Message> {
+    iced::window::close_requests().map(Message::WindowCloseRequested)
+}
+
+/// Assinatura global de atalhos de teclado (disparada apenas fora de campos `text_input` focados).
+pub fn keyboard_shortcuts(profile: KeymapProfile) -> Subscription<Message> {
+    let mapper = match profile {
+        KeymapProfile::PremierePro => map_premiere,
+        KeymapProfile::DaVinciResolve => map_davinci,
+        KeymapProfile::CapCut => map_capcut,
+        KeymapProfile::VegasPro => map_vegas,
+    };
+    keyboard::on_key_press(mapper)
 }
 
 /// Constrói o `Stream` assíncrono alimentado por uma thread leitora dedicada do canal do motor.

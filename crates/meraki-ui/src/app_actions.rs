@@ -2,7 +2,6 @@ use crate::app::{MerakiApp, Message};
 use crate::components::effects_inspector::{self, EffectsInspectorMessage};
 use crate::components::effects_library::EffectsLibraryMessage;
 use crate::components::inspector::InspectorMessage;
-use crate::components::player;
 use crate::components::player_overlay::PlayerOverlayMessage;
 use crate::components::timeline_canvas::TimelineCanvasMessage;
 use crate::playback::PlaybackMessage;
@@ -147,10 +146,7 @@ impl MerakiApp {
             EditMessage::InsertAsset(asset_id) => {
                 let _ = self.send_asset_to_timeline(asset_id);
             }
-            EditMessage::Player(p) => {
-                let msg = player::into_playback_message(p, &self.project, self.playback.playhead_ns);
-                self.handle_playback_message(msg);
-            }
+            EditMessage::Player(p) => self.handle_player_message(p),
             EditMessage::Inspector(InspectorMessage::PreviewTransform(clip_id, transform)) => {
                 self.edit.transform_draft = Some((clip_id, transform));
             }
@@ -182,10 +178,7 @@ impl MerakiApp {
         }
         match message {
             EffectsMessage::Library(lib_msg) => self.handle_library_action(lib_msg),
-            EffectsMessage::Player(p) => {
-                let msg = player::into_playback_message(p, &self.project, self.playback.playhead_ns);
-                self.handle_playback_message(msg);
-            }
+            EffectsMessage::Player(p) => self.handle_player_message(p),
             EffectsMessage::Overlay(PlayerOverlayMessage::CommitPosition { clip_id, pos_x, pos_y }) => {
                 if let Some((_, clip)) = self.project.timeline.clip(clip_id) {
                     let next = ClipTransform { pos_x, pos_y, ..clip.transform };
@@ -383,10 +376,14 @@ impl MerakiApp {
             TimelineCanvasMessage::SplitClip { clip_id, split_at_ns } => {
                 let _ = self.split_clip(clip_id, split_at_ns);
             }
+            TimelineCanvasMessage::SplitAtPlayhead => {
+                let _ = self.split_at_playhead();
+            }
             TimelineCanvasMessage::SetTool(_)
             | TimelineCanvasMessage::ToggleSnap
             | TimelineCanvasMessage::ZoomIn
-            | TimelineCanvasMessage::ZoomOut => {}
+            | TimelineCanvasMessage::ZoomOut
+            | TimelineCanvasMessage::ZoomAnchored { .. } => {}
         }
     }
 }

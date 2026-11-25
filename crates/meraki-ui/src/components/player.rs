@@ -1,9 +1,11 @@
+use crate::components::tooltip::{action_tooltip, icon_tooltip};
 use crate::playback::{format_timecode_mm_ss_ff, PlaybackMessage, PlaybackState};
 use crate::{icons, theme};
 use iced::alignment::{Horizontal, Vertical};
+use iced::widget::tooltip::Position;
 use iced::widget::{button, column, container, horizontal_space, image, row, slider, text, Stack};
 use iced::{ContentFit, Element, Length};
-use meraki_core::{PreviewQuality, Project};
+use meraki_core::{KeymapProfile, PreviewQuality, Project, ShortcutAction};
 
 /// Ações emitidas pelo player central de vídeo e barra de transporte.
 #[derive(Debug, Clone)]
@@ -31,8 +33,9 @@ pub fn view<'a>(
     playback: &'a PlaybackState,
     can_undo: bool,
     can_redo: bool,
+    profile: KeymapProfile,
 ) -> Element<'a, PlayerMessage> {
-    view_with_overlay(project, playback, can_undo, can_redo, |m| m, None)
+    view_with_overlay(project, playback, can_undo, can_redo, profile, |m| m, None)
 }
 
 /// Renderiza o player central aceitando uma camada interativa (`stack`) sobre o visor de vídeo.
@@ -41,19 +44,11 @@ pub fn view_with_overlay<'a, M: Clone + 'a>(
     playback: &'a PlaybackState,
     can_undo: bool,
     can_redo: bool,
+    profile: KeymapProfile,
     map_player: impl Fn(PlayerMessage) -> M + Copy + 'a,
     overlay: Option<Element<'a, M>>,
 ) -> Element<'a, M> {
-    let top_bar = row![
-        history_button(icons::UNDO, "Desfazer", can_undo, map_player(PlayerMessage::Undo)),
-        history_button(icons::REDO, "Refazer", can_redo, map_player(PlayerMessage::Redo)),
-        horizontal_space(),
-        container(text("16:9").size(11).font(theme::FONT_SEMIBOLD).color(theme::TEXT_SECONDARY))
-            .padding([4, 9])
-            .style(theme::badge),
-    ]
-    .spacing(8)
-    .align_y(Vertical::Center);
+    let top_bar = history_row(can_undo, can_redo, profile, map_player, false);
 
     let viewport = container(build_viewport(playback, overlay))
         .width(Length::Fill)
@@ -70,30 +65,17 @@ pub fn view_with_overlay<'a, M: Clone + 'a>(
         format_timecode_mm_ss_ff(total_ns, 30),
     );
 
-    let transport_icon = if playback.is_playing { icons::PAUSE } else { icons::PLAY };
-    let play_pause_btn = button(icons::icon(transport_icon, 14.0, theme::TEXT_ON_ACCENT))
-        .padding([7, 14])
-        .style(theme::primary_button)
-        .on_press(map_player(PlayerMessage::TogglePlayPause));
-
-    let step_back_btn = button(icons::icon(icons::STEP_BACK, 14.0, theme::TEXT_PRIMARY))
-        .padding([7, 9])
-        .style(theme::secondary_button)
-        .on_press(map_player(PlayerMessage::StepBack));
-    let step_forward_btn = button(icons::icon(icons::STEP_FORWARD, 14.0, theme::TEXT_PRIMARY))
-        .padding([7, 9])
-        .style(theme::secondary_button)
-        .on_press(map_player(PlayerMessage::StepForward));
+    let (step_back_btn, play_pause_btn, step_forward_btn) =
+        transport_buttons(playback.is_playing, profile, map_player, false);
 
     let mut speed_row = row![].spacing(4).align_y(Vertical::Center);
     for (rate, label) in SPEED_OPTIONS {
         let active = (playback.playback_rate - rate).abs() < 0.05;
-        speed_row = speed_row.push(
-            button(text(label).size(11).font(theme::FONT_MEDIUM))
-                .padding([5, 7])
-                .style(theme::filter_pill_button(active))
-                .on_press(map_player(PlayerMessage::SetRate(rate))),
-        );
+        let btn = button(text(label).size(11).font(theme::FONT_MEDIUM))
+            .padding([5, 7])
+            .style(theme::filter_pill_button(active))
+            .on_press(map_player(PlayerMessage::SetRate(rate)));
+        speed_row = speed_row.push(icon_tooltip(btn, "Velocidade de Reprodução", Position::Top));
     }
 
     let volume_ctrl = row![
@@ -108,13 +90,7 @@ pub fn view_with_overlay<'a, M: Clone + 'a>(
     .spacing(6)
     .align_y(Vertical::Center);
 
-    let is_720 = playback.preview_quality == PreviewQuality::Proxy720p;
-    let quality_row = row![
-        quality_pill("720p", is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Proxy720p))),
-        quality_pill("1080p", !is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Full1080p))),
-    ]
-    .spacing(4)
-    .align_y(Vertical::Center);
+    let quality_row = quality_controls(playback.preview_quality, map_player);
 
     let transport_bar = container(
         row![
@@ -154,18 +130,10 @@ pub fn view_compact<'a, M: Clone + 'a>(
     playback: &'a PlaybackState,
     can_undo: bool,
     can_redo: bool,
+    profile: KeymapProfile,
     map_player: impl Fn(PlayerMessage) -> M + Copy + 'a,
 ) -> Element<'a, M> {
-    let top_bar = row![
-        history_button(icons::UNDO, "Desfazer", can_undo, map_player(PlayerMessage::Undo)),
-        history_button(icons::REDO, "Refazer", can_redo, map_player(PlayerMessage::Redo)),
-        horizontal_space(),
-        container(text("16:9").size(10).font(theme::FONT_SEMIBOLD).color(theme::TEXT_SECONDARY))
-            .padding([3, 7])
-            .style(theme::badge),
-    ]
-    .spacing(6)
-    .align_y(Vertical::Center);
+    let top_bar = history_row(can_undo, can_redo, profile, map_player, true);
 
     let viewport = container(build_viewport(playback, None))
         .width(Length::Fill)
@@ -182,21 +150,9 @@ pub fn view_compact<'a, M: Clone + 'a>(
         format_timecode_mm_ss_ff(total_ns, 30),
     );
 
-    let transport_icon = if playback.is_playing { icons::PAUSE } else { icons::PLAY };
-    let play_pause_btn = button(icons::icon(transport_icon, 13.0, theme::TEXT_ON_ACCENT))
-        .padding([6, 12])
-        .style(theme::primary_button)
-        .on_press(map_player(PlayerMessage::TogglePlayPause));
-    let step_back_btn = button(icons::icon(icons::STEP_BACK, 13.0, theme::TEXT_PRIMARY))
-        .padding([6, 8])
-        .style(theme::secondary_button)
-        .on_press(map_player(PlayerMessage::StepBack));
-    let step_forward_btn = button(icons::icon(icons::STEP_FORWARD, 13.0, theme::TEXT_PRIMARY))
-        .padding([6, 8])
-        .style(theme::secondary_button)
-        .on_press(map_player(PlayerMessage::StepForward));
+    let (step_back_btn, play_pause_btn, step_forward_btn) =
+        transport_buttons(playback.is_playing, profile, map_player, true);
 
-    let is_720 = playback.preview_quality == PreviewQuality::Proxy720p;
     let row_top = row![
         step_back_btn,
         play_pause_btn,
@@ -207,6 +163,7 @@ pub fn view_compact<'a, M: Clone + 'a>(
     .spacing(6)
     .align_y(Vertical::Center);
 
+    let is_720 = playback.preview_quality == PreviewQuality::Proxy720p;
     let row_bottom = row![
         icons::icon(icons::VOLUME, 13.0, theme::TEXT_SECONDARY),
         slider(0.0_f32..=1.0_f32, playback.master_volume, move |v| {
@@ -215,8 +172,8 @@ pub fn view_compact<'a, M: Clone + 'a>(
         .step(0.05_f32)
         .width(Length::Fill)
         .style(theme::preview_slider),
-        quality_pill("720p", is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Proxy720p))),
-        quality_pill("1080p", !is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Full1080p))),
+        quality_pill("720p", "Prévia 720p (Mais fluida)", is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Proxy720p))),
+        quality_pill("1080p", "Prévia 1080p (Qualidade total)", !is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Full1080p))),
     ]
     .spacing(6)
     .align_y(Vertical::Center);
@@ -236,6 +193,101 @@ pub fn view_compact<'a, M: Clone + 'a>(
     .height(Length::Fill)
     .padding(10)
     .style(theme::base_canvas)
+    .into()
+}
+
+fn history_row<'a, M: Clone + 'a>(
+    can_undo: bool,
+    can_redo: bool,
+    profile: KeymapProfile,
+    map_player: impl Fn(PlayerMessage) -> M + Copy + 'a,
+    compact: bool,
+) -> Element<'a, M> {
+    let undo_btn = action_tooltip(
+        history_button(icons::UNDO, "Desfazer", can_undo, map_player(PlayerMessage::Undo)),
+        "Desfazer",
+        profile,
+        ShortcutAction::Undo,
+        Position::Bottom,
+    );
+    let redo_btn = action_tooltip(
+        history_button(icons::REDO, "Refazer", can_redo, map_player(PlayerMessage::Redo)),
+        "Refazer",
+        profile,
+        ShortcutAction::Redo,
+        Position::Bottom,
+    );
+    let badge = container(
+        text("16:9")
+            .size(if compact { 10 } else { 11 })
+            .font(theme::FONT_SEMIBOLD)
+            .color(theme::TEXT_SECONDARY),
+    )
+    .padding(if compact { [3, 7] } else { [4, 9] })
+    .style(theme::badge);
+
+    row![undo_btn, redo_btn, horizontal_space(), badge]
+        .spacing(if compact { 6 } else { 8 })
+        .align_y(Vertical::Center)
+        .into()
+}
+
+fn transport_buttons<'a, M: Clone + 'a>(
+    is_playing: bool,
+    profile: KeymapProfile,
+    map_player: impl Fn(PlayerMessage) -> M + Copy + 'a,
+    compact: bool,
+) -> (Element<'a, M>, Element<'a, M>, Element<'a, M>) {
+    let icon_sz = if compact { 13.0 } else { 14.0 };
+    let transport_icon = if is_playing { icons::PAUSE } else { icons::PLAY };
+
+    let step_back_btn = action_tooltip(
+        button(icons::icon(icons::STEP_BACK, icon_sz, theme::TEXT_PRIMARY))
+            .padding(if compact { [6, 8] } else { [7, 9] })
+            .style(theme::secondary_button)
+            .on_press(map_player(PlayerMessage::StepBack)),
+        "Voltar 1 Quadro",
+        profile,
+        ShortcutAction::StepFrameBack,
+        Position::Top,
+    );
+
+    let play_pause_btn = action_tooltip(
+        button(icons::icon(transport_icon, icon_sz, theme::TEXT_ON_ACCENT))
+            .padding(if compact { [6, 12] } else { [7, 14] })
+            .style(theme::primary_button)
+            .on_press(map_player(PlayerMessage::TogglePlayPause)),
+        "Reproduzir / Pausar",
+        profile,
+        ShortcutAction::PlayPause,
+        Position::Top,
+    );
+
+    let step_forward_btn = action_tooltip(
+        button(icons::icon(icons::STEP_FORWARD, icon_sz, theme::TEXT_PRIMARY))
+            .padding(if compact { [6, 8] } else { [7, 9] })
+            .style(theme::secondary_button)
+            .on_press(map_player(PlayerMessage::StepForward)),
+        "Avançar 1 Quadro",
+        profile,
+        ShortcutAction::StepFrameForward,
+        Position::Top,
+    );
+
+    (step_back_btn, play_pause_btn, step_forward_btn)
+}
+
+fn quality_controls<'a, M: Clone + 'a>(
+    quality: PreviewQuality,
+    map_player: impl Fn(PlayerMessage) -> M + Copy + 'a,
+) -> Element<'a, M> {
+    let is_720 = quality == PreviewQuality::Proxy720p;
+    row![
+        quality_pill("720p", "Prévia 720p (Mais fluida)", is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Proxy720p))),
+        quality_pill("1080p", "Prévia 1080p (Qualidade total)", !is_720, map_player(PlayerMessage::SetQuality(PreviewQuality::Full1080p))),
+    ]
+    .spacing(4)
+    .align_y(Vertical::Center)
     .into()
 }
 
@@ -294,22 +346,31 @@ fn history_button<'a, M: Clone + 'a>(
     .into()
 }
 
-fn quality_pill<'a, M: Clone + 'a>(label: &'a str, active: bool, msg: M) -> Element<'a, M> {
-    button(text(label).size(11).font(theme::FONT_SEMIBOLD))
-        .padding([5, 8])
-        .style(theme::filter_pill_button(active))
-        .on_press(msg)
-        .into()
+fn quality_pill<'a, M: Clone + 'a>(
+    label: &'a str,
+    tip: &'a str,
+    active: bool,
+    msg: M,
+) -> Element<'a, M> {
+    icon_tooltip(
+        button(text(label).size(11).font(theme::FONT_SEMIBOLD))
+            .padding([5, 8])
+            .style(theme::filter_pill_button(active))
+            .on_press(msg),
+        tip,
+        Position::Top,
+    )
 }
 
 /// Converte mensagens da barra do player em mensagens unificadas de reprodução/histórico.
 pub fn into_playback_message(msg: PlayerMessage, project: &Project, playhead_ns: u64) -> PlaybackMessage {
+    let frame_ns = 1_000_000_000_u64 / 30;
     match msg {
         PlayerMessage::Undo => PlaybackMessage::Undo,
         PlayerMessage::Redo => PlaybackMessage::Redo,
-        PlayerMessage::StepBack => PlaybackMessage::Seek(playhead_ns.saturating_sub(1_000_000_000)),
+        PlayerMessage::StepBack => PlaybackMessage::Seek(playhead_ns.saturating_sub(frame_ns)),
         PlayerMessage::StepForward => {
-            let next = playhead_ns.saturating_add(1_000_000_000);
+            let next = playhead_ns.saturating_add(frame_ns);
             let total = project.timeline.total_duration_ns();
             PlaybackMessage::Seek(if total > 0 { next.min(total) } else { next })
         }

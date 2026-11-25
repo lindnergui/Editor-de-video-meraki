@@ -2,13 +2,18 @@ pub mod app;
 mod app_actions;
 mod app_audio;
 pub mod app_delivery;
+pub mod app_exit_guard;
+pub mod app_precision;
+pub mod app_preferences;
 pub mod app_project_io;
+pub mod app_screens;
 pub mod components;
 pub mod fonts;
 pub mod icons;
 pub mod layout;
 pub mod navigation;
 pub mod playback;
+pub mod project_storage;
 pub mod subscription;
 pub mod theme;
 pub mod views;
@@ -16,7 +21,11 @@ pub mod window_icon;
 
 pub use app::{MerakiApp, Message};
 pub use app_delivery::{CoverSlot, DeliveryMessage, DeliveryState};
+pub use app_exit_guard::{ExitGuardMessage, PendingExitAction};
+pub use app_precision::PrecisionMessage;
 pub use app_project_io::{ProjectIoMessage, ProjectIoState};
+pub use app_screens::{AppScreen, ScreenMessage, WelcomeReturnTarget};
+pub use components::settings_menu::SettingsMenuMessage;
 pub use navigation::WorkspaceTab;
 pub use playback::{PlaybackMessage, PlaybackState};
 
@@ -38,6 +47,7 @@ pub fn run(engine: EngineHandle) -> iced::Result {
             min_size: Some(Size::new(1120.0, 680.0)),
             icon: window_icon::app_icon(),
             position: window::Position::Centered,
+            exit_on_close_request: false,
             ..window::Settings::default()
         })
         .antialiasing(true)

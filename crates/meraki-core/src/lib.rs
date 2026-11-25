@@ -4,6 +4,7 @@ pub mod export;
 pub mod history;
 mod history_audio;
 mod history_effects;
+pub mod preferences;
 pub mod project;
 pub mod timeline;
 mod timeline_audio;
@@ -29,6 +30,9 @@ pub use history::{
     SetClipTransitionCommand, SplitClipCommand, ToggleAudioEffectCommand, ToggleClipEffectCommand,
     TrimClipCommand, UpdateClipTransformCommand, UpdateTitleCommand, UpdateTrackAudioCommand,
     UpsertKeyframeCommand, UpsertVolumeKeyframeCommand,
+};
+pub use preferences::{
+    AppPreferences, KeymapProfile, RecentProjectEntry, ShortcutAction, MAX_RECENT_PROJECTS,
 };
 pub use project::{
     AssetId, EqBand, FolderId, MediaAsset, MediaFolder, MediaKind, MediaMetadata, PreviewQuality,

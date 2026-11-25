@@ -1,7 +1,9 @@
 use crate::app::Message;
+use crate::components::tooltip::icon_tooltip;
 use crate::navigation::WorkspaceTab;
 use crate::{icons, theme};
 use iced::alignment::Horizontal;
+use iced::widget::tooltip::Position;
 use iced::widget::{button, column, container, text, Column};
 use iced::{Element, Length};
 
@@ -28,7 +30,7 @@ pub fn view<'a>(active_tab: WorkspaceTab) -> Element<'a, Message> {
         .spacing(5)
         .width(Length::Fill);
 
-        button(
+        let tab_btn = button(
             container(content)
                 .center_x(Length::Fill)
                 .center_y(Length::Fill),
@@ -37,8 +39,9 @@ pub fn view<'a>(active_tab: WorkspaceTab) -> Element<'a, Message> {
         .height(60)
         .padding([8, 4])
         .style(theme::nav_tab_button(is_active))
-        .on_press(Message::SelectTab(tab))
-        .into()
+        .on_press(Message::SelectTab(tab));
+
+        icon_tooltip(tab_btn, tab.label(), Position::Right)
     }))
     .spacing(6)
     .width(Length::Fill);

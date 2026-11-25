@@ -3,7 +3,6 @@ use crate::components::audio_library::AudioLibraryMessage;
 use crate::components::audio_timeline::AudioTimelineMessage;
 use crate::components::eq_canvas::EqMessage;
 use crate::components::mixer::MixerMessage;
-use crate::components::player;
 use crate::playback::{self, PlaybackMessage};
 use crate::views::audio::{self, AudioMessage};
 use iced::Task;
@@ -93,10 +92,7 @@ impl MerakiApp {
                     let _ = self.import_media(path, sfx_folder, false);
                 }
             }
-            AudioMessage::Player(p_msg) => {
-                let pb = player::into_playback_message(p_msg, &self.project, self.playback.playhead_ns);
-                self.handle_playback_message(pb);
-            }
+            AudioMessage::Player(p_msg) => self.handle_player_message(p_msg),
             AudioMessage::Eq(eq_msg) => self.handle_eq_message(eq_msg),
             AudioMessage::Mixer(mix_msg) => self.handle_mixer_message(mix_msg),
             AudioMessage::Timeline(tl_msg) => self.handle_audio_timeline_message(tl_msg),

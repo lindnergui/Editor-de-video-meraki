@@ -1,9 +1,11 @@
+use crate::components::tooltip::icon_tooltip;
 use crate::playback::PlaybackState;
 use crate::theme;
 use iced::alignment::{Horizontal, Vertical};
 use iced::border;
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
+use iced::widget::tooltip::Position;
 use iced::widget::{
     button, column, container, horizontal_rule, row, text, vertical_rule, vertical_slider,
 };
@@ -101,14 +103,22 @@ fn track_strip<'a>(
     .style(theme::filter_pill_button(selected))
     .on_press(MixerMessage::SelectTrack(id));
 
-    let mute_btn = button(text("M").size(9).font(theme::FONT_BOLD))
-        .padding([3, 5])
-        .style(theme::mixer_toggle_button(track.audio.muted, theme::DANGER))
-        .on_press(MixerMessage::ToggleMute(id));
-    let solo_btn = button(text("S").size(9).font(theme::FONT_BOLD))
-        .padding([3, 5])
-        .style(theme::mixer_toggle_button(track.audio.solo, theme::WARNING))
-        .on_press(MixerMessage::ToggleSolo(id));
+    let mute_btn = icon_tooltip(
+        button(text("M").size(9).font(theme::FONT_BOLD))
+            .padding([3, 5])
+            .style(theme::mixer_toggle_button(track.audio.muted, theme::DANGER))
+            .on_press(MixerMessage::ToggleMute(id)),
+        "Silenciar trilha (Mute)",
+        Position::Top,
+    );
+    let solo_btn = icon_tooltip(
+        button(text("S").size(9).font(theme::FONT_BOLD))
+            .padding([3, 5])
+            .style(theme::mixer_toggle_button(track.audio.solo, theme::WARNING))
+            .on_press(MixerMessage::ToggleSolo(id)),
+        "Ouvir apenas esta trilha (Solo)",
+        Position::Top,
+    );
 
     let fader_value = track.audio.gain_db.clamp(MIXER_MIN_GAIN_DB, MAX_TRACK_GAIN_DB);
     let fader = vertical_slider(MIXER_MIN_GAIN_DB..=MAX_TRACK_GAIN_DB, fader_value, move |val| {

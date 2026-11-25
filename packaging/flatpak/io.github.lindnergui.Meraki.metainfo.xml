@@ -31,6 +31,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-11-25">
+      <description>
+        <p>Release v0.2.0 with Project Hub (recent projects, search, rename/remove), 4 keyboard shortcut profiles (Adobe Premiere Pro, DaVinci Resolve, CapCut, VEGAS Pro), descriptive action tooltips, precision playhead split and frame stepping, and the new Meraki icon identity.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-25">
       <description>
         <p>Initial public release v0.1.0 featuring the 5-tab editor, 720p proxy cache, real-time 4-band audio mixer, .meraki project persistence, and native GPU preview.</p>

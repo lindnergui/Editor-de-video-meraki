@@ -50,6 +50,20 @@ impl TimelineViewState {
     pub fn zoom_out(&mut self) {
         self.px_per_sec = (self.px_per_sec / 1.25).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
     }
+
+    /// Aplica fator de zoom mantendo a coordenada X da agulha (`anchor_ns`) ancorada na tela.
+    pub fn zoom_anchored_at(&mut self, factor: f32, anchor_ns: u64) {
+        if !factor.is_finite() || factor <= 0.0 {
+            return;
+        }
+        let old_px = self.px_per_sec;
+        let new_px = (old_px * factor).clamp(MIN_PX_PER_SEC, MAX_PX_PER_SEC);
+        let anchor_secs = (anchor_ns as f64 / 1_000_000_000.0) as f32;
+        let anchor_screen_x = LEFT_PADDING + anchor_secs * old_px - self.scroll_x_px;
+        let new_scroll = (LEFT_PADDING + anchor_secs * new_px - anchor_screen_x).max(0.0);
+        self.px_per_sec = new_px;
+        self.scroll_x_px = new_scroll;
+    }
 }
 
 /// Alvo identificado por detecção de clique/hover no Canvas da timeline.

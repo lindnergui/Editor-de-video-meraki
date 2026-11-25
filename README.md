@@ -33,12 +33,13 @@ Dependência estrita e unidirecional:
 
 ## Instalação para Usuários Finais
 
-Baixe a versão mais recente (`v0.1.0`) na página de [Releases](https://github.com/lindnergui/Editor-de-video-meraki/releases):
+Baixe a versão mais recente (`v0.2.0`) na página de [Releases](https://github.com/lindnergui/Editor-de-video-meraki/releases):
 
-- **Windows (x64):** Execute `Meraki-Setup-v0.1.0-x64.exe` (inclui todas as DLLs e plugins do GStreamer, atalhos e associação opcional de arquivos `.meraki`).
+- **Destaques da v0.2.0:** Painel Inicial de Projetos (recentes, busca, renomear/remover), 4 perfis de atalhos (`Adobe Premiere Pro`, `DaVinci Resolve`, `CapCut`, `VEGAS Pro`), tooltips descritivos com atalhos dinâmicos, corte preciso na agulha e navegação quadro a quadro, além do novo ícone oficial do Meraki.
+- **Windows (x64):** Execute `Meraki-Setup-v0.2.0-x64.exe` (inclui todas as DLLs e plugins do GStreamer, atalhos e associação opcional de arquivos `.meraki`).
 - **Linux (x86_64 Flatpak):**
   ```bash
-  flatpak install --user Meraki-v0.1.0-x86_64.flatpak
+  flatpak install --user Meraki-v0.2.0-x86_64.flatpak
   flatpak run io.github.lindnergui.Meraki
   ```
 
@@ -82,7 +83,7 @@ cargo run --release -p meraki-app
 ```powershell
 cargo build --release --bin meraki-app
 .\packaging\windows\collect_bundle.ps1
-iscc /DAppVersion=0.1.0 .\packaging\windows\meraki.iss
+iscc /DAppVersion=0.2.0 .\packaging\windows\meraki.iss
 ```
 
 ### Bundle Linux Flatpak
@@ -90,7 +91,7 @@ iscc /DAppVersion=0.1.0 .\packaging\windows\meraki.iss
 mkdir -p .cargo
 cargo vendor vendor > .cargo/config.toml
 flatpak-builder --force-clean --repo=repo build-dir packaging/flatpak/io.github.lindnergui.Meraki.yml
-flatpak build-bundle repo Meraki-v0.1.0-x86_64.flatpak io.github.lindnergui.Meraki
+flatpak build-bundle repo Meraki-v0.2.0-x86_64.flatpak io.github.lindnergui.Meraki
 ```
 
 ---
