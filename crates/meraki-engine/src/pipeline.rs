@@ -1,15 +1,22 @@
 use crate::audio_dsp::AudioDspController;
 use crate::clip_prepare;
 pub use crate::clip_prepare::PipelineError;
+use crate::live_commands::ClipPatch;
 use crate::playback_graph::PlaybackGraph;
 use crate::protocol::{EngineEvent, EngineWorkerChannel, TimelineRenderClip, TrackAudioMix};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_editing_services as ges;
-use meraki_core::PreviewQuality;
+use meraki_core::{ClipId, PreviewQuality, TrackKind};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, warn};
+
+mod transport;
+#[cfg(test)]
+mod tests;
+use transport::ReverseClock;
 
 /// Controla a reprodução e mantém o cache de mídia entre reconstruções do pipeline.
 pub(crate) struct PlaybackEngine {
@@ -21,6 +28,13 @@ pub(crate) struct PlaybackEngine {
     is_playing: bool,
     last_position_ns: u64,
     pending_seek_ns: Option<u64>,
+    reverse: Option<ReverseClock>,
+    pending_shuttle_rate: Option<f64>,
+    clips: Vec<TimelineRenderClip>,
+    preview_quality: PreviewQuality,
+    refresh_pending: bool,
+    last_refresh: Option<Instant>,
+    rate_needs_seek: bool,
 }
 
 impl PlaybackEngine {
@@ -35,6 +49,13 @@ impl PlaybackEngine {
             is_playing: false,
             last_position_ns: 0,
             pending_seek_ns: None,
+            reverse: None,
+            pending_shuttle_rate: None,
+            clips: Vec::new(),
+            preview_quality: PreviewQuality::default(),
+            refresh_pending: false,
+            last_refresh: None,
+            rate_needs_seek: false,
         })
     }
 
@@ -53,57 +74,72 @@ impl PlaybackEngine {
         // Reiniciar o mesmo pipeline durante o preroll pode recriar pads ainda presentes.
         let next = PlaybackGraph::new(&prepared, audio_mix, preview_quality, &self.worker)?;
         next.set_master_volume(self.master_volume);
+        if self.reverse.is_some() {
+            next.mute_master(true);
+        }
 
         let was_playing = self.is_playing;
         let resume_pos_ns = self.position_for_seek();
         self.graph.set_state(gst::State::Null)?;
         self.graph = next;
+        self.clips = prepared.into_iter().map(|item| item.render).collect();
+        self.preview_quality = preview_quality;
         self.is_playing = false;
         self.pending_seek_ns = None;
+        self.refresh_pending = false;
+        self.rate_needs_seek = false;
 
         if !self.graph.has_clips {
             self.last_position_ns = 0;
+            if self.stop_reverse() || was_playing {
+                self.emit_shuttle_rate();
+            }
             return Ok(());
         }
 
-        if was_playing {
-            self.play()?;
-        } else {
-            self.pause()?;
-        }
+        let state = if was_playing { gst::State::Playing } else { gst::State::Paused };
+        self.graph.set_state(state)?;
+        self.is_playing = was_playing;
         if resume_pos_ns > 0 || self.playback_rate != 1.0 {
             self.queue_seek(resume_pos_ns);
         }
         Ok(())
     }
 
-    pub(crate) fn play(&mut self) -> Result<(), PipelineError> {
-        if self.graph.has_clips {
-            self.graph.set_state(gst::State::Playing)?;
+    pub(crate) async fn update_clips_live(&mut self, patches: HashMap<ClipId, ClipPatch>) -> Result<(), PipelineError> {
+        let mut changes = Vec::with_capacity(patches.len());
+        let mut rebuild = false;
+        for (clip_id, patch) in patches {
+            let Some(index) = self.clips.iter().position(|clip| clip.clip_id == clip_id) else {
+                self.worker.emit_critical(EngineEvent::TimelineSyncRequired { clip_id });
+                continue;
+            };
+            let previous = &self.clips[index];
+            let mut next = previous.clone();
+            patch.apply(&mut next)?;
+            if next.title.is_some() && next.track_kind != TrackKind::Overlay {
+                return Err(PipelineError::LiveProperty { clip_id, property: "título só é válido em Overlay" });
+            }
+            if next != *previous {
+                rebuild |= self.graph.active_video.get(&clip_id)
+                    .map_or(next.title.is_some(), |video| !video.supports_update(previous, &next));
+                changes.push((index, next));
+            }
         }
-        self.is_playing = true;
-        Ok(())
-    }
-
-    pub(crate) fn pause(&mut self) -> Result<(), PipelineError> {
-        if self.graph.has_clips {
-            self.graph.set_state(gst::State::Paused)?;
+        if rebuild {
+            let mut snapshot = self.clips.clone();
+            for (index, clip) in changes {
+                snapshot[index] = clip;
+            }
+            let mix = self.graph.audio_dsp.settings_snapshot();
+            return self.sync_timeline(snapshot, mix, self.preview_quality).await;
         }
-        self.is_playing = false;
-        Ok(())
-    }
-
-    pub(crate) fn set_playback_rate(&mut self, rate: f64) -> Result<(), PipelineError> {
-        if !rate.is_finite() || rate.abs() < 0.05 || rate.abs() > 16.0 {
-            return Err(PipelineError::InvalidParameter {
-                name: "playback_rate",
-                reason: "taxa deve ser finita com magnitude entre 0.05 e 16.0",
-            });
-        }
-        self.playback_rate = rate;
-        if self.graph.has_clips {
-            let position_ns = self.position_for_seek();
-            self.queue_seek(position_ns);
+        for (index, clip) in changes {
+            if let Some(video) = self.graph.active_video.get(&clip.clip_id) {
+                video.apply_live(&self.clips[index], &clip)?;
+                self.refresh_pending = !self.is_playing;
+            }
+            self.clips[index] = clip;
         }
         Ok(())
     }
@@ -117,49 +153,20 @@ impl PlaybackEngine {
         }
         self.master_volume = volume.clamp(0.0, 1.0);
         self.graph.set_master_volume(self.master_volume);
+        if self.reverse.is_some() {
+            self.graph.mute_master(true);
+        }
         Ok(())
     }
 
     pub(crate) fn set_preview_quality(&mut self, quality: PreviewQuality) {
+        self.preview_quality = quality;
         self.graph.video_sink.set_preview_quality(quality);
     }
 
     pub(crate) fn queue_seek(&mut self, position_ns: u64) {
         self.last_position_ns = position_ns;
         self.pending_seek_ns = self.graph.has_clips.then_some(position_ns);
-    }
-
-    pub(crate) fn flush_pending_seek(&mut self) -> Result<(), PipelineError> {
-        let Some(position_ns) = self.pending_seek_ns else {
-            return Ok(());
-        };
-        if !self.can_seek() {
-            return Ok(());
-        }
-        self.pending_seek_ns = None;
-
-        let target = gst::ClockTime::from_nseconds(position_ns);
-        let flags = gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT;
-        let (start, stop) = if self.playback_rate >= 0.0 {
-            (target, gst::ClockTime::NONE)
-        } else {
-            (gst::ClockTime::ZERO, Some(target))
-        };
-
-        self.graph
-            .pipeline
-            .seek(
-                self.playback_rate,
-                flags,
-                gst::SeekType::Set,
-                Some(start),
-                gst::SeekType::Set,
-                stop,
-            )
-            .map_err(|err| PipelineError::SeekFailed {
-                position_ns,
-                reason: err.to_string(),
-            })
     }
 
     fn can_seek(&self) -> bool {
@@ -171,6 +178,9 @@ impl PlaybackEngine {
     }
 
     fn position_for_seek(&mut self) -> u64 {
+        if self.reverse.is_some() {
+            return self.last_position_ns;
+        }
         self.pending_seek_ns
             .or_else(|| self.query_position_ns())
             .unwrap_or(self.last_position_ns)
@@ -197,11 +207,15 @@ impl PlaybackEngine {
         let Some(bus) = self.graph.pipeline.bus() else {
             return;
         };
-        while let Some(msg) = bus.pop() {
+        for _ in 0..128 {
+            let Some(msg) = bus.pop() else { break };
             match msg.view() {
                 gst::MessageView::Error(err) => {
                     self.is_playing = false;
                     self.pending_seek_ns = None;
+                    self.refresh_pending = false;
+                    self.stop_reverse();
+                    self.emit_shuttle_rate();
                     let src = err.src().map(|s| s.path_string()).unwrap_or_default();
                     let detail = err.debug().map(|d| d.to_string()).unwrap_or_default();
                     worker.emit_critical(EngineEvent::Error(format!(
@@ -230,6 +244,26 @@ impl PlaybackEngine {
                         .handle_element_message(element_msg, worker);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn publish_title_bounds(&mut self) {
+        if self.clips.iter().all(|clip| clip.title.is_none()) || !self.can_seek() {
+            return;
+        }
+        let Some(canvas) = self.graph.video_dimensions() else { return };
+        let position = self.last_position_ns;
+        for clip in self.clips.iter().filter(|clip| clip.title.is_some()) {
+            if position < clip.timeline_start_ns || position >= clip.timeline_start_ns.saturating_add(clip.duration_ns) {
+                continue;
+            }
+            let Some(video) = self.graph.active_video.get_mut(&clip.clip_id) else { continue };
+            let bounds = video.title_bounds(canvas);
+            if video.last_title_bounds != bounds
+                && self.worker.try_emit(EngineEvent::TitleBounds { clip_id: clip.clip_id, bounds })
+            {
+                video.last_title_bounds = bounds;
             }
         }
     }

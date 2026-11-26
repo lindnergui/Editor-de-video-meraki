@@ -143,7 +143,7 @@ fn send_to_timeline_respects_in_out_routes_v1_a1_and_syncs_all_mutations() {
     assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { clips, .. }) if clips.len() == 3));
 
     app.update_clip_transform(c1, ClipTransform { opacity: 0.8, ..ClipTransform::default() }).unwrap();
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { clip_id, .. }) if clip_id == c1));
 
     // Seleciona e deleta via PlaybackMessage::DeleteSelectedClip
     let _ = app.update(Message::Playback(PlaybackMessage::SelectClip(Some(right_id))));

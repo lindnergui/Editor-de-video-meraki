@@ -3,6 +3,7 @@ mod app_actions;
 mod app_audio;
 pub mod app_delivery;
 pub mod app_exit_guard;
+mod app_live;
 pub mod app_precision;
 pub mod app_preferences;
 pub mod app_project_io;

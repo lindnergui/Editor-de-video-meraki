@@ -23,6 +23,11 @@ pub(crate) struct AudioDspController {
 }
 
 impl AudioDspController {
+    pub(crate) fn settings_snapshot(&self) -> Vec<TrackAudioMix> {
+        self.settings.iter().map(|(&track_id, settings)| TrackAudioMix {
+            track_id, settings: settings.clone(),
+        }).collect()
+    }
     pub(crate) fn new() -> Self {
         Self {
             settings: HashMap::new(),

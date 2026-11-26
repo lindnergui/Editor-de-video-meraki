@@ -1,8 +1,6 @@
 use crate::app::{MerakiApp, Message};
 use crate::components::effects_inspector::{self, EffectsInspectorMessage};
 use crate::components::effects_library::EffectsLibraryMessage;
-use crate::components::inspector::InspectorMessage;
-use crate::components::player_overlay::PlayerOverlayMessage;
 use crate::components::timeline_canvas::TimelineCanvasMessage;
 use crate::playback::PlaybackMessage;
 use crate::views::edit::EditMessage;
@@ -10,7 +8,7 @@ use crate::views::effects::{self, EffectsMessage};
 use crate::views::files::{self, FilesMessage};
 use iced::Task;
 use meraki_core::{
-    AddTitleClipCommand, ClipId, ClipTransform, ClipTransition, Keyframe, KeyframeEasing,
+    AddTitleClipCommand, ClipId, ClipTransition, Keyframe, KeyframeEasing,
     KeyframeProperty, MediaKind, RemoveKeyframeCommand, SetClipTransitionCommand, TitleOverlay,
     TitleStyle, ToggleClipEffectCommand, TransitionEdge, TransitionKind, UpdateTitleCommand,
     UpsertKeyframeCommand, VideoEffectKind,
@@ -18,7 +16,6 @@ use meraki_core::{
 
 const DEFAULT_TITLE_DURATION_NS: u64 = 3_000_000_000;
 const DEFAULT_TRANSITION_DURATION_NS: u64 = 500_000_000;
-const DEFAULT_EFFECT_INTENSITY: f32 = 0.75;
 
 impl MerakiApp {
     /// Insere um clipe de título em `T1`, seleciona-o e sincroniza com o motor.
@@ -37,7 +34,9 @@ impl MerakiApp {
     }
 
     pub fn update_title(&mut self, clip_id: ClipId, title: TitleOverlay) -> Result<(), String> {
-        self.execute_timeline_command(Box::new(UpdateTitleCommand::new(clip_id, title)))
+        self.record_timeline_command(Box::new(UpdateTitleCommand::new(clip_id, title.clone())))?;
+        self.preview_clip(clip_id, None, Some(title));
+        Ok(())
     }
 
     pub fn toggle_clip_effect(
@@ -147,26 +146,7 @@ impl MerakiApp {
                 let _ = self.send_asset_to_timeline(asset_id);
             }
             EditMessage::Player(p) => self.handle_player_message(p),
-            EditMessage::Inspector(InspectorMessage::PreviewTransform(clip_id, transform)) => {
-                self.edit.transform_draft = Some((clip_id, transform));
-            }
-            EditMessage::Inspector(InspectorMessage::CommitTransform(clip_id)) => {
-                if let Some((draft_id, tr)) = self.edit.transform_draft.take() {
-                    let changed = draft_id == clip_id
-                        && self
-                            .project
-                            .timeline
-                            .clip(clip_id)
-                            .is_some_and(|(_, c)| c.transform != tr);
-                    if changed {
-                        let _ = self.update_clip_transform(clip_id, tr);
-                    }
-                }
-            }
-            EditMessage::Inspector(InspectorMessage::UpdateTransform(clip_id, transform)) => {
-                self.edit.transform_draft = None;
-                let _ = self.update_clip_transform(clip_id, transform);
-            }
+            EditMessage::Inspector(insp_msg) => self.handle_edit_inspector_message(insp_msg),
             EditMessage::Timeline(tl) => self.handle_timeline_canvas_message(tl),
             EditMessage::SearchChanged(_) | EditMessage::SelectFolder(_) => {}
         }
@@ -179,12 +159,7 @@ impl MerakiApp {
         match message {
             EffectsMessage::Library(lib_msg) => self.handle_library_action(lib_msg),
             EffectsMessage::Player(p) => self.handle_player_message(p),
-            EffectsMessage::Overlay(PlayerOverlayMessage::CommitPosition { clip_id, pos_x, pos_y }) => {
-                if let Some((_, clip)) = self.project.timeline.clip(clip_id) {
-                    let next = ClipTransform { pos_x, pos_y, ..clip.transform };
-                    let _ = self.update_clip_transform(clip_id, next);
-                }
-            }
+            EffectsMessage::Overlay(overlay_msg) => self.handle_overlay_message(overlay_msg),
             EffectsMessage::Inspector(insp_msg) => self.handle_effects_inspector(insp_msg),
             EffectsMessage::Timeline(tl) => self.handle_timeline_canvas_message(tl),
         }
@@ -208,18 +183,15 @@ impl MerakiApp {
                     self.effects.title_draft = Some((clip_id, label.to_string()));
                 }
             }
+            EffectsLibraryMessage::ApplyTransition(kind) => self.apply_library_transition(kind),
             EffectsLibraryMessage::ToggleTransition(kind) => self.toggle_selected_transition(kind),
-            EffectsLibraryMessage::ToggleVideoEffect(kind) => {
-                if let Some(clip_id) = self.playback.selected_clip_id {
-                    let _ = self.toggle_clip_effect(clip_id, kind, DEFAULT_EFFECT_INTENSITY);
-                }
-            }
+            EffectsLibraryMessage::ToggleVideoEffect(kind) => self.apply_library_video_effect(kind),
             EffectsLibraryMessage::SearchChanged(_) | EffectsLibraryMessage::ToggleSection(_) => {}
         }
     }
 
     fn toggle_selected_transition(&mut self, kind: TransitionKind) {
-        let Some(clip_id) = self.playback.selected_clip_id else {
+        let Some(clip_id) = self.resolve_effect_target_clip_id() else {
             return;
         };
         let Some((_, clip)) = self.project.timeline.clip(clip_id) else {
@@ -253,6 +225,7 @@ impl MerakiApp {
             }
             EffectsInspectorMessage::PreviewTitleFontSize(clip_id, size) => {
                 self.effects.title_font_size_draft = Some((clip_id, size));
+                self.preview_title_font(clip_id, size);
             }
             EffectsInspectorMessage::CommitTitleFontSize(clip_id) => {
                 if let Some((draft_id, size)) = self.effects.title_font_size_draft.take() {
@@ -278,6 +251,7 @@ impl MerakiApp {
             }
             EffectsInspectorMessage::PreviewTransform(clip_id, transform) => {
                 self.effects.transform_draft = Some((clip_id, transform));
+                self.preview_transform_live(clip_id, transform);
             }
             EffectsInspectorMessage::CommitTransform(clip_id) => {
                 if let Some((draft_id, tr)) = self.effects.transform_draft.take() {
@@ -295,6 +269,16 @@ impl MerakiApp {
             EffectsInspectorMessage::UpdateTransform(clip_id, transform) => {
                 self.effects.transform_draft = None;
                 let _ = self.update_clip_transform(clip_id, transform);
+            }
+            other @ (EffectsInspectorMessage::SelectEffect(..)
+            | EffectsInspectorMessage::PreviewEffectParams(..)
+            | EffectsInspectorMessage::CommitEffectParams(..)
+            | EffectsInspectorMessage::UpdateEffectParams(..)
+            | EffectsInspectorMessage::ToggleEffectById(..)
+            | EffectsInspectorMessage::RemoveEffectById(..)
+            | EffectsInspectorMessage::ResetEffectById(..)
+            | EffectsInspectorMessage::ApplyZoomPreset(..)) => {
+                self.handle_effect_params_inspector_message(other);
             }
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property } => {
                 self.effects.active_property = property;
@@ -351,9 +335,16 @@ impl MerakiApp {
     pub(crate) fn handle_timeline_canvas_message(&mut self, msg: TimelineCanvasMessage) {
         match msg {
             TimelineCanvasMessage::Scrub(ns) => self.handle_playback_message(PlaybackMessage::Seek(ns)),
+            TimelineCanvasMessage::ScrubEmpty(ns) => {
+                self.clear_inspector_drafts();
+                self.handle_playback_message(PlaybackMessage::SelectClip(None));
+                self.reconcile_selected_effect();
+                self.handle_playback_message(PlaybackMessage::Seek(ns));
+            }
             TimelineCanvasMessage::SelectClip(id) => {
                 self.clear_inspector_drafts();
                 self.handle_playback_message(PlaybackMessage::SelectClip(id));
+                self.reconcile_selected_effect();
             }
             TimelineCanvasMessage::MoveClip { clip_id, track_id, new_start_ns } => {
                 let _ = self.move_clip(clip_id, track_id, new_start_ns);

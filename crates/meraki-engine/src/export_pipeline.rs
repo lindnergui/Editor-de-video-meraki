@@ -5,6 +5,7 @@ use crate::discoverer;
 use crate::effects_ges;
 use crate::encoding_profiles::wav_pcm_caps;
 use crate::protocol::TrackAudioMix;
+use crate::timeline_sync::ActiveVideo;
 use gstreamer as gst;
 use gstreamer_editing_services as ges;
 use gstreamer_editing_services::prelude::*;
@@ -16,7 +17,7 @@ fn clip_render_tracks(item: &PreparedClip, audio_only: bool) -> ges::TrackType {
         (PreparedSource::Media { track_types, .. }, false) => *track_types,
         (PreparedSource::Media { track_types, .. }, true)
             if item.render.track_kind != TrackKind::Overlay => *track_types & ges::TrackType::AUDIO,
-        (PreparedSource::Title(_), false) => ges::TrackType::VIDEO,
+        (PreparedSource::Title, false) => ges::TrackType::VIDEO,
         _ => ges::TrackType::empty(),
     }
 }
@@ -139,19 +140,17 @@ fn populate_export_layers(
                     .map_err(|e| format!("add_asset '{}': {e}", clip.path.display()))?;
 
                 if mask.contains(ges::TrackType::VIDEO) {
-                    effects_ges::apply_clip_transform(&ges_clip, clip, false, *natural_size, PreviewQuality::Full1080p);
-                    effects_ges::apply_clip_effects(&ges_clip, clip, worker);
-                    effects_ges::apply_transitions_and_keyframes(&ges_clip, clip, *natural_size, PreviewQuality::Full1080p);
+                    ActiveVideo::new(&ges_clip, clip, *natural_size, PreviewQuality::Full1080p, worker)
+                        .map_err(|err| err.to_string())?;
                 }
                 if mask.contains(ges::TrackType::AUDIO) {
                     audio_dsp.attach_clip_audio(&ges_clip, clip, meter);
                 }
             }
-            PreparedSource::Title(title) => {
-                if let Some(ges_clip) = effects_ges::add_title_clip(&layer, clip, title, worker) {
-                    effects_ges::apply_clip_transform(&ges_clip, clip, true, None, PreviewQuality::Full1080p);
-                    effects_ges::apply_clip_effects(&ges_clip, clip, worker);
-                    effects_ges::apply_transitions_and_keyframes(&ges_clip, clip, None, PreviewQuality::Full1080p);
+            PreparedSource::Title => {
+                if let Some(ges_clip) = effects_ges::add_title_clip(&layer, clip, worker) {
+                    ActiveVideo::new(&ges_clip, clip, None, PreviewQuality::Full1080p, worker)
+                        .map_err(|err| err.to_string())?;
                 }
             }
         }

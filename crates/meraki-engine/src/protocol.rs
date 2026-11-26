@@ -92,6 +92,15 @@ pub enum EngineCommand {
         audio_mix: Vec<TrackAudioMix>,
         preview_quality: PreviewQuality,
     },
+    /// Campos ausentes preservam o valor atual. `effects` substitui a lista inteira.
+    UpdateClipLive {
+        clip_id: ClipId,
+        transform: Option<ClipTransform>,
+        title: Option<TitleOverlay>,
+        effects: Option<Vec<ClipEffect>>,
+    },
+    /// -1 recua, 0 pausa e 1 avança. Pressões sucessivas aceleram na mesma direção.
+    Shuttle { direction: i8 },
     Play,
     Pause,
     SetPlaybackRate(f64),
@@ -162,6 +171,10 @@ pub enum EngineEvent {
     FrameReady(VideoFrame),
     /// Posição atual da agulha de reprodução em nanossegundos.
     PlayheadTick(u64),
+    ShuttleRateChanged { shuttle_rate: f64 },
+    /// O motor ainda não recebeu o snapshot que contém este clipe.
+    TimelineSyncRequired { clip_id: ClipId },
+    TitleBounds { clip_id: ClipId, bounds: Option<meraki_core::NormalizedTitleBox> },
     /// Níveis de áudio atualizados (~30 Hz) para o Mixer vertical.
     AudioLevels(AudioMeterFrame),
     ExportProgress {
@@ -278,7 +291,11 @@ impl EngineWorkerChannel {
     /// Emite evento de alta frequência (quadro de vídeo / VU meter).
     /// Se a UI estiver atrasada, descarta silenciosamente para nunca travar o pipeline GStreamer.
     pub fn emit_drop_if_full(&self, event: EngineEvent) {
-        let _ = self.event_tx.try_send(event);
+        self.try_emit(event);
+    }
+
+    pub(crate) fn try_emit(&self, event: EngineEvent) -> bool {
+        self.event_tx.try_send(event).is_ok()
     }
 
     /// Emite evento crítico de estado (erro, descoberta de mídia, fim de exportação).

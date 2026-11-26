@@ -4,11 +4,13 @@ use crate::clip_prepare::{PipelineError, PreparedClip, PreparedSource};
 use crate::effects_ges;
 use crate::frame_sink::{build_audio_preview_sink, PreviewVideoSink};
 use crate::protocol::{EngineWorkerChannel, TrackAudioMix};
+use crate::timeline_sync::ActiveVideo;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_editing_services as ges;
 use gstreamer_editing_services::prelude::*;
-use meraki_core::{PreviewQuality, TrackKind};
+use meraki_core::{ClipId, PreviewQuality, TrackKind};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -18,6 +20,8 @@ pub(crate) struct PlaybackGraph {
     pub(crate) audio_dsp: AudioDspController,
     pub(crate) audio_meter: AudioMeterAggregator,
     pub(crate) has_clips: bool,
+    pub(crate) active_video: HashMap<ClipId, ActiveVideo>,
+    video_track: ges::VideoTrack,
     master_volume: gst::Element,
 }
 
@@ -29,8 +33,9 @@ impl PlaybackGraph {
         worker: &Arc<EngineWorkerChannel>,
     ) -> Result<Self, PipelineError> {
         let timeline = ges::Timeline::new();
+        let video_track = ges::VideoTrack::new();
         timeline
-            .add_track(&ges::VideoTrack::new())
+            .add_track(&video_track)
             .map_err(|err| setup_error("add_video_track", err))?;
         timeline
             .add_track(&ges::AudioTrack::new())
@@ -49,11 +54,12 @@ impl PlaybackGraph {
         audio_meter.reset_for_sync(&meter_tracks);
 
         let mut layers = Vec::new();
+        let mut active_video = HashMap::new();
         let mut has_clips = false;
         for item in clips {
             let clip = &item.render;
             let layer = acquire_layer(&timeline, &mut layers, item);
-            let (ges_clip, track_types, is_title, natural_size) = match &item.source {
+            let (ges_clip, track_types, natural_size) = match &item.source {
                 PreparedSource::Media {
                     asset,
                     track_types,
@@ -77,26 +83,19 @@ impl PlaybackGraph {
                             path: clip.path.clone(),
                             reason: err.to_string(),
                         })?;
-                    (ges_clip, *track_types, false, *natural_size)
+                    (ges_clip, *track_types, *natural_size)
                 }
-                PreparedSource::Title(title) => {
-                    let Some(ges_clip) = effects_ges::add_title_clip(&layer, clip, title, worker)
+                PreparedSource::Title => {
+                    let Some(ges_clip) = effects_ges::add_title_clip(&layer, clip, worker)
                     else {
                         continue;
                     };
-                    (ges_clip, ges::TrackType::VIDEO, true, None)
+                    (ges_clip, ges::TrackType::VIDEO, None)
                 }
             };
             has_clips = true;
             if track_types.contains(ges::TrackType::VIDEO) {
-                effects_ges::apply_clip_transform(&ges_clip, clip, is_title, natural_size, quality);
-                effects_ges::apply_clip_effects(&ges_clip, clip, worker);
-                effects_ges::apply_transitions_and_keyframes(
-                    &ges_clip,
-                    clip,
-                    natural_size,
-                    quality,
-                );
+                active_video.insert(clip.clip_id, ActiveVideo::new(&ges_clip, clip, natural_size, quality, worker)?);
             }
             if track_types.contains(ges::TrackType::AUDIO) {
                 audio_dsp.attach_clip_audio(&ges_clip, clip, &mut audio_meter);
@@ -127,8 +126,20 @@ impl PlaybackGraph {
             audio_dsp,
             audio_meter,
             has_clips,
+            active_video,
+            video_track,
             master_volume,
         })
+    }
+
+    pub(crate) fn video_dimensions(&self) -> Option<[u32; 2]> {
+        let caps = self.video_track.static_pad("src")?.current_caps()?;
+        let info = gstreamer_video::VideoInfo::from_caps(&caps).ok()?;
+        Some([info.width(), info.height()])
+    }
+
+    pub(crate) fn mute_master(&self, muted: bool) {
+        self.master_volume.set_property("mute", muted);
     }
 
     pub(crate) fn set_master_volume(&self, volume: f32) {

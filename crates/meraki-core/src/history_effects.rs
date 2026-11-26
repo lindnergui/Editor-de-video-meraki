@@ -124,6 +124,7 @@ impl Command for ToggleClipEffectCommand {
     fn undo(&mut self, project: &mut Project) -> Result<(), HistoryError> {
         let prev = self
             .previous
+            .clone()
             .ok_or(HistoryError::InvalidCommandState("estado anterior do efeito ausente"))?;
         match prev {
             Some(effect) => {

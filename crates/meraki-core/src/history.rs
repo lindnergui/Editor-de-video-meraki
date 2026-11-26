@@ -2,9 +2,13 @@ pub use crate::history_audio::{
     ApplyVoicePresetCommand, RemoveVolumeKeyframeCommand, ToggleAudioEffectCommand,
     UpdateTrackAudioCommand, UpsertVolumeKeyframeCommand,
 };
+pub use crate::history_effect_params::{
+    AddClipEffectCommand, RemoveEffectCommand, SetClipTransformCommand, ToggleEffectCommand,
+    UpdateEffectParamsCommand,
+};
 pub use crate::history_effects::{
-    AddTitleClipCommand, RemoveKeyframeCommand, SetClipTransitionCommand,
-    ToggleClipEffectCommand, UpdateTitleCommand, UpsertKeyframeCommand,
+    AddTitleClipCommand, RemoveKeyframeCommand, SetClipTransitionCommand, ToggleClipEffectCommand,
+    UpdateTitleCommand, UpsertKeyframeCommand,
 };
 use crate::project::{MediaAsset, MediaFolder, Project, ProjectError};
 use crate::timeline::{Clip, ClipId, ClipTransform, TimelineError, TrackId};

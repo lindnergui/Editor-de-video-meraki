@@ -18,6 +18,9 @@ fn all_four_keymap_profiles_expose_expected_metadata_and_shortcut_labels() {
             assert!(!profile.shortcut_label(action).is_empty());
         }
         assert_eq!(profile.shortcut_label(ShortcutAction::PlayPause), "Space");
+        assert_eq!(profile.shortcut_label(ShortcutAction::ShuttleReverse), "J");
+        assert_eq!(profile.shortcut_label(ShortcutAction::ShuttlePause), "K");
+        assert_eq!(profile.shortcut_label(ShortcutAction::ShuttleForward), "L");
         assert_eq!(profile.shortcut_label(ShortcutAction::StepFrameBack), "←");
         assert_eq!(profile.shortcut_label(ShortcutAction::StepFrameForward), "→");
         assert_eq!(profile.shortcut_label(ShortcutAction::Undo), "Ctrl+Z");

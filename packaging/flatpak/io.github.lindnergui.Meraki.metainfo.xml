@@ -31,6 +31,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-11-26">
+      <description>
+        <p>Release v0.3.0 introducing real-time preview while dragging inspector sliders, double-click individual parameter reset, J/K/L shuttle playback shortcuts, an individual effect inspector with quick Zoom presets, visual FX badges on timeline clips, a fix for duplicate title text in the preview overlay, and direct timeline clicking to position the playhead.</p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-11-25">
       <description>
         <p>Release v0.2.0 with Project Hub (recent projects, search, rename/remove), 4 keyboard shortcut profiles (Adobe Premiere Pro, DaVinci Resolve, CapCut, VEGAS Pro), descriptive action tooltips, precision playhead split and frame stepping, and the new Meraki icon identity.</p>

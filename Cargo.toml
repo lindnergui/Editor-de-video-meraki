@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Meraki Contributors"]
@@ -35,7 +35,7 @@ gstreamer-pbutils = "0.23"
 gstreamer-video = "0.23"
 
 # Camada 3: Interface nativa em Rust (GPU via wgpu)
-iced = { version = "0.13", features = ["wgpu", "canvas", "tokio", "svg", "image"] }
+iced = { version = "0.13", features = ["wgpu", "canvas", "tokio", "svg", "image", "advanced"] }
 rfd = "0.15"
 
 # Crates internos

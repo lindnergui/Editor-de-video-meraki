@@ -87,10 +87,11 @@ fn toggle_effect_and_transition_commands_validate_and_undo_redo() {
     ));
 
     history.execute(Box::new(ToggleClipEffectCommand::new(clip_id, VideoEffectKind::Cinematic, 0.8)), &mut project).unwrap();
-    assert_eq!(
-        project.timeline.clip(clip_id).unwrap().1.effects,
-        vec![ClipEffect { kind: VideoEffectKind::Cinematic, intensity: 0.8, enabled: true }]
-    );
+    let fx = &project.timeline.clip(clip_id).unwrap().1.effects;
+    assert_eq!(fx.len(), 1);
+    assert_eq!(fx[0].kind, VideoEffectKind::Cinematic);
+    assert_eq!(fx[0].intensity, 0.8);
+    assert!(fx[0].enabled);
 
     history.execute(Box::new(ToggleClipEffectCommand::new(clip_id, VideoEffectKind::Cinematic, 0.6)), &mut project).unwrap();
     assert!(!project.timeline.clip(clip_id).unwrap().1.effects[0].enabled);

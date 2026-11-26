@@ -68,7 +68,12 @@ pub fn hash_timeline_static(
             if let Some(ref title) = clip.title {
                 title.text.hash(&mut h);
             }
-            clip.effects.iter().filter(|e| e.enabled).count().hash(&mut h);
+            clip.effects.len().hash(&mut h);
+            for fx in &clip.effects {
+                fx.id.hash(&mut h);
+                fx.enabled.hash(&mut h);
+                fx.short_badge_label().hash(&mut h);
+            }
             clip.transition_in.is_some().hash(&mut h);
             clip.transition_out.is_some().hash(&mut h);
             clip.keyframes.len().hash(&mut h);

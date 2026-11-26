@@ -2552,7 +2552,7 @@ dependencies = [
 
 [[package]]
 name = "meraki-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "meraki-core",
  "meraki-engine",
@@ -2564,7 +2564,7 @@ dependencies = [
 
 [[package]]
 name = "meraki-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2574,7 +2574,7 @@ dependencies = [
 
 [[package]]
 name = "meraki-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "crossbeam-channel",
@@ -2594,7 +2594,7 @@ dependencies = [
 
 [[package]]
 name = "meraki-ui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "iced",
@@ -2602,6 +2602,7 @@ dependencies = [
  "meraki-engine",
  "rfd",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

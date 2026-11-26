@@ -108,7 +108,7 @@ fn effects_library_search_sections_and_title_insertion_at_playhead() {
         app.project().timeline.clip(second_title_id).unwrap().1.title.as_ref().unwrap().text,
         "O FUTURO"
     );
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { title: Some(title), .. }) if title.text == "O FUTURO"));
 
     let custom_title = TitleOverlay {
         text: "O FUTURO".to_string(),
@@ -124,7 +124,7 @@ fn effects_library_search_sections_and_title_insertion_at_playhead() {
         app.project().timeline.clip(second_title_id).unwrap().1.title.as_ref(),
         Some(&custom_title)
     );
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { title: Some(title), .. }) if title == custom_title));
 
     // Desfazer / Refazer sincroniza motor e limpa rascunho de texto
     assert!(app.undo());
@@ -193,7 +193,7 @@ fn effects_transitions_overlay_drag_and_keyframes_sync_and_undo_redo() {
     )));
     assert_eq!(app.project().timeline.clip(clip_id).unwrap().1.transform.pos_x, 120.0);
     assert_eq!(app.project().timeline.clip(clip_id).unwrap().1.transform.pos_y, -60.0);
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { transform: Some(tr), .. }) if tr.pos_y == -60.0));
 
     // Keyframes no timestamp 2.0s com Linear e alternância para EaseInOut
     let _ = app.update(Message::Playback(PlaybackMessage::Seek(2_000_000_000)));
@@ -241,7 +241,7 @@ fn effects_transitions_overlay_drag_and_keyframes_sync_and_undo_redo() {
 }
 
 #[test]
-fn effects_inspector_sliders_defer_sync_until_commit_on_release() {
+fn effects_inspector_sliders_preview_live_and_record_only_on_release() {
     let (engine, worker) = create_engine_channel();
     let mut app = MerakiApp::new(engine);
     let _ = app.update(Message::SelectTab(WorkspaceTab::Effects));
@@ -251,7 +251,6 @@ fn effects_inspector_sliders_defer_sync_until_commit_on_release() {
     let clip_id = app.selected_clip_id().unwrap();
     while worker.try_recv_command().is_some() {}
 
-    // Arraste em tamanho de fonte e transformação não dispara SyncTimeline
     let _ = app.update(Message::Effects(EffectsMessage::Inspector(
         EffectsInspectorMessage::PreviewTitleFontSize(clip_id, 64),
     )));
@@ -264,14 +263,17 @@ fn effects_inspector_sliders_defer_sync_until_commit_on_release() {
             meraki_core::ClipTransform { pos_x: 150.0, ..Default::default() },
         ),
     )));
-    assert!(worker.try_recv_command().is_none());
+    for size in [64, 84] {
+        assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { title: Some(title), .. }) if title.font_size == size));
+    }
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { transform: Some(tr), .. }) if tr.pos_x == 150.0));
     assert_eq!(app.effects_state().title_font_size_draft, Some((clip_id, 84)));
     assert_eq!(
         app.effects_state().transform_draft.map(|(_, tr)| tr.pos_x),
         Some(150.0)
     );
 
-    // Release grava exatamente uma mutação e um SyncTimeline para cada controle
+    // O release confirma cada valor no HistoryStack.
     let _ = app.update(Message::Effects(EffectsMessage::Inspector(
         EffectsInspectorMessage::CommitTitleFontSize(clip_id),
     )));
@@ -279,13 +281,13 @@ fn effects_inspector_sliders_defer_sync_until_commit_on_release() {
         app.project().timeline.clip(clip_id).unwrap().1.title.as_ref().unwrap().font_size,
         84
     );
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { title: Some(title), .. }) if title.font_size == 84));
     assert!(worker.try_recv_command().is_none());
 
     let _ = app.update(Message::Effects(EffectsMessage::Inspector(
         EffectsInspectorMessage::CommitTransform(clip_id),
     )));
     assert_eq!(app.project().timeline.clip(clip_id).unwrap().1.transform.pos_x, 150.0);
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { transform: Some(tr), .. }) if tr.pos_x == 150.0));
     assert!(worker.try_recv_command().is_none());
 }

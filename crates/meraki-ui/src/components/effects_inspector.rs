@@ -1,15 +1,18 @@
-use crate::components::easing_card;
+use crate::components::resettable_slider::{resettable_slider, ResettableSliderSpec};
+use crate::components::{easing_card, effect_param_controls};
+pub use crate::components::effects_params_panel::ZoomPreset;
 use crate::{icons, theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, column, container, horizontal_rule, horizontal_space, row, scrollable, slider, text,
+    button, column, container, horizontal_rule, horizontal_space, row, scrollable, text,
     text_input,
 };
 use iced::{Element, Length};
 use meraki_core::{
-    Clip, ClipId, ClipTransform, Keyframe, KeyframeEasing, KeyframeProperty, Project, TitleOverlay,
-    TitleStyle,
+    Clip, ClipId, ClipTransform, EffectParameters, Keyframe, KeyframeEasing, KeyframeProperty,
+    Project, TitleOverlay, TitleStyle,
 };
+use uuid::Uuid;
 
 /// Tolerância temporal (`20ms`) para considerar um keyframe alinhado à agulha atual.
 pub const KEYFRAME_SNAP_TOLERANCE_NS: u64 = 20_000_000;
@@ -20,6 +23,8 @@ pub struct EffectsInspectorDrafts<'a> {
     pub title_text: Option<&'a str>,
     pub title_font_size: Option<u32>,
     pub transform: Option<ClipTransform>,
+    pub effect_params: Option<(ClipId, Uuid, EffectParameters)>,
+    pub selected_effect_id: Option<Uuid>,
 }
 
 /// Mensagens emitidas pelo painel direito `INSPETOR DE EFEITOS`.
@@ -32,6 +37,14 @@ pub enum EffectsInspectorMessage {
     PreviewTransform(ClipId, ClipTransform),
     CommitTransform(ClipId),
     UpdateTransform(ClipId, ClipTransform),
+    SelectEffect(Uuid),
+    PreviewEffectParams(ClipId, Uuid, EffectParameters),
+    CommitEffectParams(ClipId, Uuid),
+    UpdateEffectParams(ClipId, Uuid, EffectParameters),
+    ToggleEffectById(ClipId, Uuid),
+    RemoveEffectById(ClipId, Uuid),
+    ResetEffectById(ClipId, Uuid),
+    ApplyZoomPreset(ClipId, Uuid, ZoomPreset),
     ToggleKeyframe { clip_id: ClipId, property: KeyframeProperty },
     SetEasing(KeyframeEasing),
 }
@@ -53,7 +66,7 @@ pub fn find_keyframe_near(
         .find(|kf| kf.property == property && kf.time_offset_ns.abs_diff(offset_ns) <= KEYFRAME_SNAP_TOLERANCE_NS)
 }
 
-/// Painel direito (`280px`, fundo `#181922`) exibindo Texto (`T1`), Transformação com keyframes e Curvas.
+/// Painel direito (`280px`, fundo `#181922`) exibindo Texto (`T1`), Efeitos, Transformação e Curvas.
 pub fn view<'a>(
     project: &'a Project,
     selected_clip_id: Option<ClipId>,
@@ -78,6 +91,13 @@ pub fn view<'a>(
                     title,
                     drafts.title_text,
                     drafts.title_font_size,
+                ));
+            }
+            if clip.title.is_none() || !clip.effects.is_empty() {
+                controls = controls.push(effect_param_controls::view(
+                    clip,
+                    drafts.selected_effect_id,
+                    drafts.effect_params,
                 ));
             }
             controls = controls.push(transform_section(clip, offset_ns, drafts.transform));
@@ -158,6 +178,8 @@ fn title_section<'a>(
 
     let effective_size = font_size_draft.unwrap_or(title.font_size).clamp(16, 120);
     let size_val = f32::from(effective_size as u16);
+    let default_font_size = TitleOverlay::new("x", title.style).font_size;
+    let reset_title = TitleOverlay { font_size: default_font_size, ..title.clone() };
     let title_for_color = title.clone();
 
     container(
@@ -169,25 +191,22 @@ fn title_section<'a>(
                 .padding([6, 8])
                 .style(theme::text_input_style),
             style_pills,
-            row![
-                text("Tamanho").size(11).color(theme::TEXT_SECONDARY),
-                horizontal_space(),
-                text(format!("{effective_size} px"))
-                    .size(11)
-                    .font(theme::FONT_SEMIBOLD)
-                    .color(theme::ACCENT_HOVER),
-            ]
-            .align_y(Vertical::Center),
-            slider(16.0_f32..=120.0_f32, size_val, move |val| {
-                EffectsInspectorMessage::PreviewTitleFontSize(
-                    clip_id,
-                    val.round().clamp(16.0, 120.0) as u32,
-                )
-            })
-            .step(2.0_f32)
-            .on_release(EffectsInspectorMessage::CommitTitleFontSize(clip_id))
-            .width(Length::Fill)
-            .style(theme::preview_slider),
+            resettable_slider(ResettableSliderSpec {
+                label: "Tamanho",
+                value_label: format!("{effective_size} px"),
+                range: 16.0_f32..=120.0_f32,
+                step: 2.0_f32,
+                current: size_val,
+                on_change: Box::new(move |val| {
+                    EffectsInspectorMessage::PreviewTitleFontSize(
+                        clip_id,
+                        val.round().clamp(16.0, 120.0) as u32,
+                    )
+                }),
+                on_release: EffectsInspectorMessage::CommitTitleFontSize(clip_id),
+                on_reset: EffectsInspectorMessage::UpdateTitle(clip_id, reset_title),
+                trailing: None,
+            }),
             easing_card::color_swatch_row(title.color_rgba, move |rgba| {
                 let mut next = title_for_color.clone();
                 next.color_rgba = rgba;
@@ -225,10 +244,21 @@ fn transform_section<'a>(
 ) -> Element<'a, EffectsInspectorMessage> {
     let clip_id = clip.id;
     let tr = transform_draft.unwrap_or(clip.transform);
+    let defaults = ClipTransform::default();
     let opacity_pct = (tr.opacity * 100.0).round().clamp(0.0, 100.0);
 
-    column![
+    let header = row![
         text("Transformar").size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+        horizontal_space(),
+        button(text("Resetar").size(11).color(theme::TEXT_SECONDARY))
+            .padding([3, 8])
+            .style(theme::ghost_button)
+            .on_press(EffectsInspectorMessage::UpdateTransform(clip_id, defaults)),
+    ]
+    .align_y(Vertical::Center);
+
+    column![
+        header,
         keyframed_slider(
             "Posição X",
             format!("{:.0} px", tr.pos_x),
@@ -238,6 +268,7 @@ fn transform_section<'a>(
             find_keyframe_near(clip, KeyframeProperty::PosX, offset_ns).is_some(),
             move |pos_x| EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_x, ..tr }),
             EffectsInspectorMessage::CommitTransform(clip_id),
+            EffectsInspectorMessage::UpdateTransform(clip_id, ClipTransform { pos_x: defaults.pos_x, ..tr }),
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::PosX },
         ),
         keyframed_slider(
@@ -249,6 +280,7 @@ fn transform_section<'a>(
             find_keyframe_near(clip, KeyframeProperty::PosY, offset_ns).is_some(),
             move |pos_y| EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_y, ..tr }),
             EffectsInspectorMessage::CommitTransform(clip_id),
+            EffectsInspectorMessage::UpdateTransform(clip_id, ClipTransform { pos_y: defaults.pos_y, ..tr }),
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::PosY },
         ),
         keyframed_slider(
@@ -260,6 +292,7 @@ fn transform_section<'a>(
             find_keyframe_near(clip, KeyframeProperty::Scale, offset_ns).is_some(),
             move |scale| EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { scale, ..tr }),
             EffectsInspectorMessage::CommitTransform(clip_id),
+            EffectsInspectorMessage::UpdateTransform(clip_id, ClipTransform { scale: defaults.scale, ..tr }),
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::Scale },
         ),
         keyframed_slider(
@@ -274,6 +307,7 @@ fn transform_section<'a>(
                 EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { opacity, ..tr })
             },
             EffectsInspectorMessage::CommitTransform(clip_id),
+            EffectsInspectorMessage::UpdateTransform(clip_id, ClipTransform { opacity: defaults.opacity, ..tr }),
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::Opacity },
         ),
     ]
@@ -291,35 +325,28 @@ fn keyframed_slider<'a>(
     has_kf: bool,
     on_change: impl Fn(f32) -> EffectsInspectorMessage + 'a,
     on_release: EffectsInspectorMessage,
+    on_reset: EffectsInspectorMessage,
     on_kf_toggle: EffectsInspectorMessage,
 ) -> Element<'a, EffectsInspectorMessage> {
     let kf_icon = if has_kf { icons::KEYFRAME_FILLED } else { icons::KEYFRAME_OUTLINE };
     let kf_tint = if has_kf { theme::ACCENT } else { theme::TEXT_SECONDARY };
-    container(
-        column![
-            row![
-                text(label).size(12).font(theme::FONT_MEDIUM).color(theme::TEXT_PRIMARY),
-                horizontal_space(),
-                text(value_label).size(11).font(theme::FONT_SEMIBOLD).color(theme::ACCENT_HOVER),
-                button(icons::icon(kf_icon, 12.0, kf_tint))
-                    .padding([3, 5])
-                    .style(theme::ghost_button)
-                    .on_press(on_kf_toggle),
-            ]
-            .spacing(4)
-            .align_y(Vertical::Center),
-            slider(range, current, on_change)
-                .step(step)
-                .on_release(on_release)
-                .width(Length::Fill)
-                .style(theme::preview_slider),
-        ]
-        .spacing(6),
-    )
-    .width(Length::Fill)
-    .padding([8, 10])
-    .style(theme::card)
-    .into()
+    let kf_btn = button(icons::icon(kf_icon, 12.0, kf_tint))
+        .padding([3, 5])
+        .style(theme::ghost_button)
+        .on_press(on_kf_toggle)
+        .into();
+
+    resettable_slider(ResettableSliderSpec {
+        label,
+        value_label,
+        range,
+        step,
+        current,
+        on_change: Box::new(on_change),
+        on_release,
+        on_reset,
+        trailing: Some(kf_btn),
+    })
 }
 
 fn keyframes_section<'a>(

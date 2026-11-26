@@ -150,14 +150,109 @@ pub(crate) fn draw_clip_box(
     if size.width > 34.0 {
         frame.fill_text(Text {
             content: label.to_string(),
-            position: Point::new(left_x + 10.0, top_left.y + 7.0),
+            position: Point::new(left_x + 10.0, top_left.y + 6.0),
             color: theme::TEXT_PRIMARY,
             size: Pixels(11.0),
             ..Text::default()
         });
     }
 
+    draw_effect_badges(frame, clip, top_left, size);
     draw_keyframe_markers(frame, clip, start_ns, duration_ns, left_x, right_x, top_left.y + size.height, px, scroll, selected);
+}
+
+/// Badge compacto de efeito renderizado dentro de um clipe na timeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectBadge {
+    pub label: String,
+    pub is_accent: bool,
+}
+
+fn badge_width_px(label: &str) -> f32 {
+    (label.chars().count() as f32) * 5.8 + 10.0
+}
+
+/// Seleciona os badges `FX` + etiquetas curtas (ou `+N`) que cabem na largura visual disponível.
+pub fn compute_effect_badges(clip: &Clip, available_width: f32) -> Vec<EffectBadge> {
+    let active: Vec<&str> = clip
+        .effects
+        .iter()
+        .filter(|e| e.enabled)
+        .map(|e| e.short_badge_label())
+        .collect();
+    if active.is_empty() || available_width < badge_width_px("FX") {
+        return Vec::new();
+    }
+
+    let gap = 4.0_f32;
+    let mut badges = vec![EffectBadge {
+        label: "FX".to_string(),
+        is_accent: true,
+    }];
+    let mut used = badge_width_px("FX");
+
+    for (idx, label) in active.iter().enumerate() {
+        let w = badge_width_px(label);
+        let remaining = active.len() - idx - 1;
+        let overflow_reserve = if remaining > 0 {
+            gap + badge_width_px(&format!("+{remaining}"))
+        } else {
+            0.0
+        };
+        if used + gap + w + overflow_reserve <= available_width {
+            badges.push(EffectBadge {
+                label: (*label).to_string(),
+                is_accent: false,
+            });
+            used += gap + w;
+        } else {
+            let hidden = active.len() - idx;
+            let overflow_label = format!("+{hidden}");
+            if used + gap + badge_width_px(&overflow_label) <= available_width {
+                badges.push(EffectBadge {
+                    label: overflow_label,
+                    is_accent: false,
+                });
+            }
+            break;
+        }
+    }
+    badges
+}
+
+fn draw_effect_badges(frame: &mut Frame, clip: &Clip, top_left: Point, size: Size) {
+    let avail = size.width - 20.0;
+    let badges = compute_effect_badges(clip, avail);
+    if badges.is_empty() {
+        return;
+    }
+
+    let badge_y = top_left.y + 21.0;
+    let badge_h = 14.0_f32;
+    let mut cursor_x = top_left.x + 10.0;
+
+    for badge in badges {
+        let w = badge_width_px(&badge.label);
+        let pill = Path::rounded_rectangle(
+            Point::new(cursor_x, badge_y),
+            Size::new(w, badge_h),
+            border::Radius::from(3.5),
+        );
+        if badge.is_accent {
+            frame.fill(&pill, theme::ACCENT);
+        } else {
+            frame.fill(&pill, theme::BG_PANEL);
+            frame.stroke(&pill, Stroke::default().with_color(theme::BORDER_SUBTLE).with_width(1.0));
+        }
+        frame.fill_text(Text {
+            content: badge.label,
+            position: Point::new(cursor_x + 5.0, badge_y + 1.5),
+            color: if badge.is_accent { theme::TEXT_ON_ACCENT } else { theme::TEXT_PRIMARY },
+            size: Pixels(9.5),
+            ..Text::default()
+        });
+        cursor_x += w + 4.0;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

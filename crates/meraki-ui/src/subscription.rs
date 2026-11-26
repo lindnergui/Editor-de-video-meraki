@@ -113,6 +113,11 @@ pub fn map_keyboard_shortcut(
 }
 
 fn map_unmodified_char_shortcut(profile: KeymapProfile, ch: &str) -> Option<Message> {
+    for (key, direction) in [("j", -1), ("k", 0), ("l", 1)] {
+        if ch.eq_ignore_ascii_case(key) {
+            return Some(Message::Playback(PlaybackMessage::Shuttle(direction)));
+        }
+    }
     let msg = match profile {
         KeymapProfile::PremierePro => {
             if ch.eq_ignore_ascii_case("v") {
@@ -218,6 +223,18 @@ mod tests {
     use iced::futures::StreamExt;
     use meraki_core::{AssetId, MediaMetadata};
     use meraki_engine::protocol::create_engine_channel;
+
+    #[test]
+    fn shuttle_keys_work_across_profiles_with_no_modifiers() {
+        for profile in [KeymapProfile::PremierePro, KeymapProfile::DaVinciResolve, KeymapProfile::CapCut, KeymapProfile::VegasPro] {
+            for (key, direction) in [("j", -1), ("k", 0), ("l", 1)] {
+                assert!(matches!(
+                    map_keyboard_shortcut(profile, Key::Character(key.into()), Modifiers::empty()),
+                    Some(Message::Playback(PlaybackMessage::Shuttle(actual))) if actual == direction
+                ));
+            }
+        }
+    }
 
     #[test]
     fn engine_events_stream_forwards_engine_events_until_worker_disconnects() {

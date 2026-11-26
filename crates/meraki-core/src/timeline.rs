@@ -146,6 +146,8 @@ pub enum TimelineError {
     InvalidTitle { field: &'static str, reason: &'static str },
     #[error("efeito inválido no campo '{field}': {reason}")]
     InvalidEffect { field: &'static str, reason: &'static str },
+    #[error("efeito {effect_id} não encontrado no clipe {clip_id}")]
+    EffectNotFound { clip_id: ClipId, effect_id: Uuid },
     #[error("transição inválida: {reason}")]
     InvalidTransition { reason: &'static str },
     #[error("keyframe inválido no campo '{field}': {reason}")]

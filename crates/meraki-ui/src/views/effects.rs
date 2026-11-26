@@ -3,17 +3,18 @@ use crate::components::effects_library::{
     self, EffectsLibraryMessage, EffectsLibraryState, LibrarySection,
 };
 use crate::components::player::{self, PlayerMessage};
-use crate::components::player_overlay::{self, PlayerOverlayMessage};
+use crate::components::player_overlay::{self, OverlayLiveDraft, PlayerOverlayMessage};
 use crate::components::timeline_canvas::{self, TimelineCanvasMessage};
 use crate::components::timeline_math::TimelineViewState;
 use crate::playback::PlaybackState;
 use crate::theme;
-use iced::widget::{column, container, horizontal_rule, row, vertical_rule};
+use iced::widget::{column, container, horizontal_rule, image, row, vertical_rule};
 use iced::{Element, Length};
 use meraki_core::{
-    ClipId, ClipTransform, HistoryStack, KeyframeEasing, KeyframeProperty, KeymapProfile, Project,
-    TrackKind,
+    ClipId, ClipTransform, EffectParameters, HistoryStack, KeyframeEasing, KeyframeProperty,
+    KeymapProfile, Project, TrackKind,
 };
+use uuid::Uuid;
 
 /// Estado local da aba Efeitos (biblioteca, timeline, texto temporário e easing ativo).
 #[derive(Debug, Clone)]
@@ -25,6 +26,8 @@ pub struct EffectsState {
     pub title_draft: Option<(ClipId, String)>,
     pub title_font_size_draft: Option<(ClipId, u32)>,
     pub transform_draft: Option<(ClipId, ClipTransform)>,
+    pub effect_params_draft: Option<(ClipId, Uuid, EffectParameters)>,
+    pub selected_effect_id: Option<Uuid>,
 }
 
 impl Default for EffectsState {
@@ -37,6 +40,8 @@ impl Default for EffectsState {
             title_draft: None,
             title_font_size_draft: None,
             transform_draft: None,
+            effect_params_draft: None,
+            selected_effect_id: None,
         }
     }
 }
@@ -115,17 +120,14 @@ pub fn view<'a>(
         .and_then(|id| project.timeline.clip(id).map(|(_, clip)| clip));
 
     let library_panel = effects_library::view(&state.library, selected_clip).map(EffectsMessage::Library);
-    let overlay = player_overlay::optional_view(selected_clip).map(|el| el.map(EffectsMessage::Overlay));
-    let player_panel = player::view_with_overlay(
-        project,
-        playback,
-        history.can_undo(),
-        history.can_redo(),
-        profile,
-        EffectsMessage::Player,
-        overlay,
-    );
-
+    let title_bounds = selected_clip.filter(|clip| {
+        clip.timeline_start_ns <= playback.playhead_ns
+            && playback.playhead_ns < clip.timeline_start_ns.saturating_add(clip.duration_ns)
+    }).and_then(|clip| playback.title_bounds.get(&clip.id).copied());
+    let video_aspect_ratio = match &playback.current_frame {
+        Some(image::Handle::Rgba { width, height, .. }) if *width > 0 && *height > 0 => *width as f32 / *height as f32,
+        _ => 16.0 / 9.0,
+    };
     let drafts = EffectsInspectorDrafts {
         title_text: state
             .title_draft
@@ -137,7 +139,26 @@ pub fn view<'a>(
         transform: state
             .transform_draft
             .and_then(|(id, tr)| (Some(id) == playback.selected_clip_id).then_some(tr)),
+        effect_params: state
+            .effect_params_draft
+            .and_then(|(cid, eid, params)| (Some(cid) == playback.selected_clip_id).then_some((cid, eid, params))),
+        selected_effect_id: state.selected_effect_id,
     };
+    let overlay_draft = OverlayLiveDraft {
+        transform: drafts.transform,
+        font_size: drafts.title_font_size,
+    };
+    let overlay = player_overlay::optional_view(selected_clip, title_bounds, video_aspect_ratio, overlay_draft)
+        .map(|el| el.map(EffectsMessage::Overlay));
+    let player_panel = player::view_with_overlay(
+        project,
+        playback,
+        history.can_undo(),
+        history.can_redo(),
+        profile,
+        EffectsMessage::Player,
+        overlay,
+    );
     let inspector_panel = effects_inspector::view(
         project,
         playback.selected_clip_id,

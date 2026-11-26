@@ -147,7 +147,7 @@ fn edit_tab_actions_update_state_history_and_engine_sync() {
     let custom_tr = ClipTransform { scale: 1.5, pos_x: 30.0, pos_y: -10.0, opacity: 0.9, speed: 1.25 };
     let _ = app.update(Message::Edit(EditMessage::Inspector(InspectorMessage::UpdateTransform(clip_id, custom_tr))));
     assert_eq!(app.project().timeline.clip(clip_id).unwrap().1.transform, custom_tr);
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { transform: Some(tr), .. }) if tr == custom_tr));
 
     // Player Undo / Redo e transporte
     let _ = app.update(Message::Edit(EditMessage::Player(PlayerMessage::Undo)));
@@ -208,7 +208,7 @@ fn edit_tab_actions_update_state_history_and_engine_sync() {
 }
 
 #[test]
-fn inspector_sliders_defer_sync_until_commit_on_release() {
+fn inspector_sliders_preview_live_and_record_only_on_release() {
     let (engine, worker) = create_engine_channel();
     let mut app = MerakiApp::new(engine);
     let video_id = app.import_media(PathBuf::from("cena.mp4"), None, false).unwrap();
@@ -220,12 +220,12 @@ fn inspector_sliders_defer_sync_until_commit_on_release() {
     let clip_id = app.send_asset_to_timeline(video_id).unwrap();
     while worker.try_recv_command().is_some() {}
 
-    // Arraste contínuo atualiza apenas rascunho local sem disparar SyncTimeline
     for scale in [1.2, 1.5, 1.8] {
         let draft = ClipTransform { scale, ..ClipTransform::default() };
         let _ = app.update(Message::Edit(EditMessage::Inspector(
             InspectorMessage::PreviewTransform(clip_id, draft),
         )));
+        assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { transform: Some(tr), .. }) if tr == draft));
     }
     assert!(worker.try_recv_command().is_none());
     assert_eq!(
@@ -234,13 +234,13 @@ fn inspector_sliders_defer_sync_until_commit_on_release() {
     );
     assert_eq!(app.project().timeline.clip(clip_id).unwrap().1.transform.scale, 1.0);
 
-    // Somente on_release confirma no HistoryStack e envia um único SyncTimeline
+    // O release confirma a transformação no HistoryStack.
     let _ = app.update(Message::Edit(EditMessage::Inspector(
         InspectorMessage::CommitTransform(clip_id),
     )));
     assert!(app.edit_state().transform_draft.is_none());
     assert_eq!(app.project().timeline.clip(clip_id).unwrap().1.transform.scale, 1.8);
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SyncTimeline { .. })));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateClipLive { transform: Some(tr), .. }) if tr.scale == 1.8));
     assert!(worker.try_recv_command().is_none());
 
     assert!(app.undo());

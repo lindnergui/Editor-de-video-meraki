@@ -251,8 +251,11 @@ fn preferences_persistence_recovers_corrupted_json_and_records_recent_projects()
     assert_eq!(corrupted_loaded.keymap, KeymapProfile::PremierePro);
 
     let (engine, _worker) = create_engine_channel();
-    let mut app = MerakiApp::new(engine);
-    app.set_preferences_path(prefs_file.clone());
+    let mut app = MerakiApp::with_preferences_path(
+        engine,
+        meraki_core::Project::new("Projeto sem título"),
+        prefs_file.clone(),
+    );
     assert!(app.set_keymap_profile(KeymapProfile::VegasPro).is_ok());
     assert!(app.rename_project("Projeto Recente".to_string()).is_ok());
 

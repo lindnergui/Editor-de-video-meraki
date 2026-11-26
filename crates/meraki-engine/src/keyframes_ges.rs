@@ -6,39 +6,41 @@ use gstreamer_controller::prelude::*;
 use gstreamer_editing_services as ges;
 use gstreamer_editing_services::prelude::*;
 use meraki_core::{
-    ClipTransition, Keyframe, KeyframeEasing, KeyframeProperty, PreviewQuality, TransitionKind,
+    ClipTransition, EffectParameters, Keyframe, KeyframeEasing, KeyframeProperty, TransitionKind,
+    ZoomEasing, ZoomParams,
 };
 use std::collections::BTreeSet;
 use tracing::debug;
 
+mod clip_transitions;
+use clip_transitions::supports_blur;
+pub(crate) use clip_transitions::{
+    attach_blur_transition, needs_blur, transitions, update_blur_transition,
+};
+
 /// Aplica curvas `InterpolationControlSource` para transições e keyframes do clipe.
-pub(crate) fn apply_transitions_and_keyframes(
-    ges_clip: &ges::Clip,
+pub(crate) fn apply_motion(
+    track_elem: &ges::TrackElement,
     clip: &TimelineRenderClip,
-    natural_size: Option<(i32, i32)>,
-    preview_quality: PreviewQuality,
+    (base_w, base_h): (i32, i32),
 ) {
-    let elems = ges_clip.find_track_elements(
-        None::<&ges::Track>,
-        ges::TrackType::VIDEO,
-        ges::VideoSource::static_type(),
-    );
-    let Some(track_elem) = elems.into_iter().next() else {
-        return;
-    };
-
-    let inpoint_ns = track_elem.upcast_ref::<ges::TimelineElement>().inpoint().nseconds();
-    let blur_ready = gst::ElementFactory::find("gaussianblur").is_some()
-        && gst::ElementFactory::find("videoconvert").is_some();
-
-    let tr_in_fade = clip.transition_in.filter(|t| {
-        t.kind == TransitionKind::Fade || (t.kind == TransitionKind::Blur && !blur_ready)
+    let inpoint_ns = track_elem
+        .upcast_ref::<ges::TimelineElement>()
+        .inpoint()
+        .nseconds();
+    let (transition_in, transition_out) = transitions(clip);
+    let tr_in_fade = transition_in.filter(|t| {
+        t.kind == TransitionKind::Fade || (t.kind == TransitionKind::Blur && !supports_blur())
     });
-    let tr_out_fade = clip.transition_out.filter(|t| {
-        t.kind == TransitionKind::Fade || (t.kind == TransitionKind::Blur && !blur_ready)
+    let tr_out_fade = transition_out.filter(|t| {
+        t.kind == TransitionKind::Fade || (t.kind == TransitionKind::Blur && !supports_blur())
     });
-    let mut opacity_kfs: Vec<Keyframe> =
-        clip.keyframes.iter().copied().filter(|k| k.property == KeyframeProperty::Opacity).collect();
+    let mut opacity_kfs: Vec<Keyframe> = clip
+        .keyframes
+        .iter()
+        .copied()
+        .filter(|k| k.property == KeyframeProperty::Opacity)
+        .collect();
     opacity_kfs.sort_by_key(|k| k.time_offset_ns);
 
     if tr_in_fade.is_some() || tr_out_fade.is_some() || !opacity_kfs.is_empty() {
@@ -49,46 +51,111 @@ pub(crate) fn apply_transitions_and_keyframes(
             tr_out_fade,
             &opacity_kfs,
         );
-        bind_curve(&track_elem, "alpha", mode, inpoint_ns, &points);
+        bind_curve(track_elem, "alpha", mode, inpoint_ns, &points);
     }
 
-    bind_axis_keyframes(&track_elem, inpoint_ns, clip.duration_ns, &clip.keyframes, KeyframeProperty::PosX, "posx");
-    bind_axis_keyframes(&track_elem, inpoint_ns, clip.duration_ns, &clip.keyframes, KeyframeProperty::PosY, "posy");
+    bind_axis_keyframes(
+        track_elem,
+        inpoint_ns,
+        clip.duration_ns,
+        &clip.keyframes,
+        KeyframeProperty::PosX,
+        "posx",
+    );
+    bind_axis_keyframes(
+        track_elem,
+        inpoint_ns,
+        clip.duration_ns,
+        &clip.keyframes,
+        KeyframeProperty::PosY,
+        "posy",
+    );
 
-    let mut scale_kfs: Vec<Keyframe> =
-        clip.keyframes.iter().copied().filter(|k| k.property == KeyframeProperty::Scale).collect();
+    let mut scale_kfs: Vec<Keyframe> = clip
+        .keyframes
+        .iter()
+        .copied()
+        .filter(|k| k.property == KeyframeProperty::Scale)
+        .collect();
     scale_kfs.sort_by_key(|k| k.time_offset_ns);
-    let zoom_in = clip.transition_in.filter(|t| t.kind == TransitionKind::Zoom);
-    let zoom_out = clip.transition_out.filter(|t| t.kind == TransitionKind::Zoom);
-
-    if !scale_kfs.is_empty() || zoom_in.is_some() || zoom_out.is_some() {
-        let (base_w, base_h) =
-            resolve_base_dimensions(ges_clip.upcast_ref(), natural_size, preview_quality);
-        apply_scale_or_zoom(&track_elem, inpoint_ns, clip, base_w, base_h, &scale_kfs, zoom_in, zoom_out);
+    let zoom_in = transition_in.filter(|t| t.kind == TransitionKind::Zoom);
+    let zoom_out = transition_out.filter(|t| t.kind == TransitionKind::Zoom);
+    let zoom = zoom_params(clip);
+    if let Some(zoom) = zoom {
+        apply_zoom(track_elem, clip, (base_w, base_h), inpoint_ns, zoom);
     }
-
-    if blur_ready {
-        apply_blur_transition(ges_clip, clip.duration_ns, clip.transition_in, clip.transition_out);
+    if !scale_kfs.is_empty() || (zoom.is_none() && (zoom_in.is_some() || zoom_out.is_some())) {
+        apply_scale_or_zoom(
+            track_elem, inpoint_ns, clip, base_w, base_h, &scale_kfs, zoom_in, zoom_out,
+        );
     }
 }
 
-pub(crate) fn resolve_base_dimensions(
-    elem: &ges::TimelineElement,
-    natural_size: Option<(i32, i32)>,
-    preview_quality: PreviewQuality,
-) -> (i32, i32) {
-    let child_w = elem.child_property("width").and_then(|v| v.get::<i32>().ok()).filter(|&w| w > 0);
-    let child_h = elem.child_property("height").and_then(|v| v.get::<i32>().ok()).filter(|&h| h > 0);
-    if let (Some(w), Some(h)) = (child_w, child_h) {
-        return (w, h);
-    }
-    if let Some((nw, nh)) = natural_size {
-        if nw > 0 && nh > 0 {
-            return (nw, nh);
+pub(crate) fn zoom_params(clip: &TimelineRenderClip) -> Option<ZoomParams> {
+    clip.effects
+        .iter()
+        .rev()
+        .filter(|effect| effect.enabled)
+        .find_map(|effect| match effect.params {
+            EffectParameters::Zoom(zoom) => Some(zoom),
+            _ => None,
+        })
+}
+
+fn apply_zoom(
+    track: &ges::TrackElement,
+    clip: &TimelineRenderClip,
+    (width, height): (i32, i32),
+    inpoint: u64,
+    zoom: ZoomParams,
+) {
+    let (base_scale, x, y) = if clip.title.is_some() {
+        (1.0, 0.0, 0.0)
+    } else {
+        (
+            f64::from(clip.transform.scale),
+            f64::from(clip.transform.pos_x),
+            f64::from(clip.transform.pos_y),
+        )
+    };
+    let sx = f64::from(width) * base_scale;
+    let sy = f64::from(height) * base_scale;
+    let points = |map: &dyn Fn(f64) -> f64| {
+        (0..=16)
+            .map(|i| {
+                let fraction = f64::from(i) / 16.0;
+                let t = match zoom.easing {
+                    ZoomEasing::Linear => fraction,
+                    ZoomEasing::EaseInOut => fraction * fraction * (3.0 - 2.0 * fraction),
+                    ZoomEasing::Constant => 0.0,
+                };
+                let scale = zoom.start_scale + (zoom.end_scale - zoom.start_scale) * t;
+                (clip.duration_ns.saturating_mul(i as u64) / 16, map(scale))
+            })
+            .collect::<Vec<_>>()
+    };
+    for (key, prop, size, position, focus) in [
+        (KeyframeProperty::Scale, "width", sx, 0.0, 0.0),
+        (KeyframeProperty::Scale, "height", sy, 0.0, 0.0),
+        (KeyframeProperty::PosX, "posx", sx, x, zoom.focus_x),
+        (KeyframeProperty::PosY, "posy", sy, y, zoom.focus_y),
+    ] {
+        if clip.keyframes.iter().any(|item| item.property == key) {
+            continue;
         }
+        let values = if key == KeyframeProperty::Scale {
+            points(&|scale| (size * scale).max(1.0))
+        } else {
+            points(&|scale| position + (size - size * scale) * (focus + 1.0) * 0.5)
+        };
+        bind_curve(
+            track,
+            prop,
+            gst_ctrl::InterpolationMode::Linear,
+            inpoint,
+            &values,
+        );
     }
-    let (pw, ph) = preview_quality.max_dimensions();
-    (pw as i32, ph as i32)
 }
 
 fn bind_axis_keyframes(
@@ -99,7 +166,11 @@ fn bind_axis_keyframes(
     prop: KeyframeProperty,
     gst_prop: &str,
 ) {
-    let mut filtered: Vec<Keyframe> = keyframes.iter().copied().filter(|k| k.property == prop).collect();
+    let mut filtered: Vec<Keyframe> = keyframes
+        .iter()
+        .copied()
+        .filter(|k| k.property == prop)
+        .collect();
     if filtered.is_empty() {
         return;
     }
@@ -165,51 +236,16 @@ fn apply_scale_or_zoom(
         }
         (gst_ctrl::InterpolationMode::CubicMonotonic, pts)
     };
-    let w_pts: Vec<(u64, f64)> = scale_pts.iter().map(|&(t, s)| (t, (f64::from(base_w) * s).max(1.0))).collect();
-    let h_pts: Vec<(u64, f64)> = scale_pts.iter().map(|&(t, s)| (t, (f64::from(base_h) * s).max(1.0))).collect();
+    let w_pts: Vec<(u64, f64)> = scale_pts
+        .iter()
+        .map(|&(t, s)| (t, (f64::from(base_w) * s).max(1.0)))
+        .collect();
+    let h_pts: Vec<(u64, f64)> = scale_pts
+        .iter()
+        .map(|&(t, s)| (t, (f64::from(base_h) * s).max(1.0)))
+        .collect();
     bind_curve(track_elem, "width", mode, inpoint_ns, &w_pts);
     bind_curve(track_elem, "height", mode, inpoint_ns, &h_pts);
-}
-
-fn apply_blur_transition(
-    ges_clip: &ges::Clip,
-    duration_ns: u64,
-    tr_in: Option<ClipTransition>,
-    tr_out: Option<ClipTransition>,
-) {
-    let blur_in = tr_in.filter(|t| t.kind == TransitionKind::Blur);
-    let blur_out = tr_out.filter(|t| t.kind == TransitionKind::Blur);
-    if blur_in.is_none() && blur_out.is_none() {
-        return;
-    }
-    let Ok(effect) = ges::Effect::new("videoconvert ! gaussianblur sigma=0.0 ! videoconvert") else {
-        return;
-    };
-    if GESContainerExt::add(ges_clip, &effect).is_err() {
-        return;
-    }
-    let eff_elem: &ges::TrackElement = effect.upcast_ref();
-    if ges::prelude::TrackElementExt::lookup_child(eff_elem, "sigma").is_none() {
-        return;
-    }
-    let eff_inpoint = effect.upcast_ref::<ges::TimelineElement>().inpoint().nseconds();
-    let mut pts = Vec::new();
-    if let Some(bin) = blur_in {
-        pts.push((0, 8.0));
-        pts.push((bin.duration_ns.min(duration_ns), 0.0));
-    } else {
-        pts.push((0, 0.0));
-    }
-    if let Some(bout) = blur_out {
-        let out_start = duration_ns.saturating_sub(bout.duration_ns);
-        if pts.last().is_none_or(|&(t, _)| t < out_start) {
-            pts.push((out_start, 0.0));
-        }
-        pts.push((duration_ns, 8.0));
-    } else if pts.last().is_none_or(|&(t, _)| t < duration_ns) {
-        pts.push((duration_ns, 0.0));
-    }
-    bind_curve(eff_elem, "sigma", gst_ctrl::InterpolationMode::CubicMonotonic, eff_inpoint, &pts);
 }
 
 fn bind_curve(
@@ -222,18 +258,30 @@ fn bind_curve(
     if points.is_empty() {
         return;
     }
+    if track_elem.control_binding(prop).is_some() {
+        let _ = track_elem.remove_control_binding(prop);
+    }
     let src = gst_ctrl::InterpolationControlSource::new();
     src.set_mode(mode);
     for &(offset_ns, value) in points {
-        let _ = src.set(gst::ClockTime::from_nseconds(inpoint_ns.saturating_add(offset_ns)), value);
+        let _ = src.set(
+            gst::ClockTime::from_nseconds(inpoint_ns.saturating_add(offset_ns)),
+            value,
+        );
     }
     if !track_elem.set_control_source(&src, prop, "direct-absolute") {
-        debug!(prop, "propriedade não suportou binding direct-absolute no elemento GES");
+        debug!(
+            prop,
+            "propriedade não suportou binding direct-absolute no elemento GES"
+        );
     }
 }
 
 fn pick_interpolation_mode(keyframes: &[Keyframe], bounded: bool) -> gst_ctrl::InterpolationMode {
-    if keyframes.iter().any(|k| k.easing == KeyframeEasing::EaseInOut) {
+    if keyframes
+        .iter()
+        .any(|k| k.easing == KeyframeEasing::EaseInOut)
+    {
         if bounded {
             gst_ctrl::InterpolationMode::CubicMonotonic
         } else {
@@ -273,9 +321,16 @@ pub(crate) fn build_alpha_curve(
         .into_iter()
         .map(|t| {
             let kf_alpha = sample_opacity_at(t, base_opacity, opacity_kfs);
-            let in_factor = if in_dur > 0 && t < in_dur { (t as f64) / (in_dur as f64) } else { 1.0 };
-            let out_factor =
-                if out_dur > 0 && t > out_start { ((duration_ns - t) as f64) / (out_dur as f64) } else { 1.0 };
+            let in_factor = if in_dur > 0 && t < in_dur {
+                (t as f64) / (in_dur as f64)
+            } else {
+                1.0
+            };
+            let out_factor = if out_dur > 0 && t > out_start {
+                ((duration_ns - t) as f64) / (out_dur as f64)
+            } else {
+                1.0
+            };
             (t, (kf_alpha * in_factor.min(out_factor)).clamp(0.0, 1.0))
         })
         .collect();
@@ -298,7 +353,8 @@ fn sample_opacity_at(t: u64, base_opacity: f64, kfs: &[Keyframe]) -> f64 {
     for pair in kfs.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         if t <= b.time_offset_ns && b.time_offset_ns > a.time_offset_ns {
-            let ratio = ((t - a.time_offset_ns) as f64) / ((b.time_offset_ns - a.time_offset_ns) as f64);
+            let ratio =
+                ((t - a.time_offset_ns) as f64) / ((b.time_offset_ns - a.time_offset_ns) as f64);
             return f64::from(a.value) + (f64::from(b.value) - f64::from(a.value)) * ratio;
         }
     }
@@ -317,11 +373,18 @@ mod tests {
             1.0,
             Some(ClipTransition::new(TransitionKind::Fade, 500_000_000)),
             Some(ClipTransition::new(TransitionKind::Fade, 500_000_000)),
-            &[Keyframe::new(1_000_000_000, KeyframeProperty::Opacity, 0.5, KeyframeEasing::EaseInOut)],
+            &[Keyframe::new(
+                1_000_000_000,
+                KeyframeProperty::Opacity,
+                0.5,
+                KeyframeEasing::EaseInOut,
+            )],
         );
         assert_eq!(mode, gst_ctrl::InterpolationMode::CubicMonotonic);
         assert_eq!(pts[0], (0, 0.0));
         assert_eq!(pts[pts.len() - 1], (2_000_000_000, 0.0));
-        assert!(pts.iter().any(|&(t, v)| t == 1_000_000_000 && (v - 0.5).abs() < 1e-6));
+        assert!(pts
+            .iter()
+            .any(|&(t, v)| t == 1_000_000_000 && (v - 0.5).abs() < 1e-6));
     }
 }

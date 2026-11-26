@@ -2,7 +2,7 @@ use crate::discoverer::{self, DiscovererError};
 use crate::protocol::TimelineRenderClip;
 use gstreamer_editing_services as ges;
 use gstreamer_editing_services::prelude::*;
-use meraki_core::{ClipId, TimelineError, TitleOverlay, TrackKind};
+use meraki_core::{ClipId, TimelineError, TrackKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -37,6 +37,8 @@ pub enum PipelineError {
     StateChange { target: String, reason: String },
     #[error("falha ao executar seek para {position_ns}ns: {reason}")]
     SeekFailed { position_ns: u64, reason: String },
+    #[error("falha ao atualizar clipe {clip_id} ao vivo: {property}")]
+    LiveProperty { clip_id: ClipId, property: &'static str },
 }
 
 pub(crate) enum PreparedSource {
@@ -46,7 +48,7 @@ pub(crate) enum PreparedSource {
         is_image: bool,
         natural_size: Option<(i32, i32)>,
     },
-    Title(TitleOverlay),
+    Title,
 }
 
 pub(crate) struct PreparedClip {
@@ -90,11 +92,11 @@ pub(crate) async fn prepare_clips(
         }
 
         if clip.track_kind == TrackKind::Overlay {
-            if let Some(title) = clip.title.clone() {
+            if let Some(title) = &clip.title {
                 title
                     .validate()
                     .map_err(|source| PipelineError::InvalidTransform { clip_id: clip.clip_id, source })?;
-                prepared.push(PreparedClip { render: clip, source: PreparedSource::Title(title) });
+                prepared.push(PreparedClip { render: clip, source: PreparedSource::Title });
                 continue;
             }
         }

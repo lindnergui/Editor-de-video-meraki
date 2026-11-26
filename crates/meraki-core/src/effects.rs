@@ -1,5 +1,7 @@
+use crate::effect_params::{ClipEffectSerde, EffectParameters};
 use crate::timeline::TimelineError;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Transformações espaciais, opacidade e velocidade aplicadas a um clipe na timeline.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -13,13 +15,7 @@ pub struct ClipTransform {
 
 impl Default for ClipTransform {
     fn default() -> Self {
-        Self {
-            scale: 1.0,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            opacity: 1.0,
-            speed: 1.0,
-        }
+        Self { scale: 1.0, pos_x: 0.0, pos_y: 0.0, opacity: 1.0, speed: 1.0 }
     }
 }
 
@@ -103,28 +99,103 @@ impl ClipTransition {
     }
 }
 
-/// Efeitos de vídeo simplificados disponíveis na aba Efeitos.
+/// Categorias de efeitos de vídeo aplicáveis a um clipe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VideoEffectKind {
     Glitch,
     Cinematic,
+    #[serde(alias = "Film")]
     FilmStyle,
+    Zoom,
+    Blur,
+    Transition,
 }
 
-/// Instância de efeito de vídeo anexada a um clipe.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct ClipEffect {
-    pub kind: VideoEffectKind,
-    pub intensity: f32,
-    pub enabled: bool,
-}
+pub type EffectKind = VideoEffectKind;
 
-impl ClipEffect {
-    pub fn new(kind: VideoEffectKind, intensity: f32) -> Self {
-        Self { kind, intensity, enabled: true }
+impl VideoEffectKind {
+    /// Nome legível padrão do efeito na interface e no inspetor.
+    pub const fn default_name(self) -> &'static str {
+        match self {
+            Self::Glitch => "Glitch",
+            Self::Cinematic => "Cinemático",
+            Self::FilmStyle => "Estilo Filme",
+            Self::Zoom => "Zoom",
+            Self::Blur => "Desfoque",
+            Self::Transition => "Transição",
+        }
     }
 
-    /// Valida que a intensidade do efeito seja finita e normalizada entre `0.0` e `1.0`.
+    /// Rótulo curto padrão para badges sobre o clipe na timeline.
+    pub const fn short_badge_label(self) -> &'static str {
+        match self {
+            Self::Glitch => "Glitch",
+            Self::Cinematic => "Cinema",
+            Self::FilmStyle => "Filme",
+            Self::Zoom => "Zoom",
+            Self::Blur => "Blur",
+            Self::Transition => "Fade",
+        }
+    }
+}
+
+/// Instância de efeito de vídeo anexada a um clipe com parâmetros editáveis individuais.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "ClipEffectSerde")]
+pub struct ClipEffect {
+    pub id: Uuid,
+    pub kind: VideoEffectKind,
+    pub name: String,
+    pub intensity: f32,
+    pub enabled: bool,
+    pub params: EffectParameters,
+}
+
+pub type VideoEffect = ClipEffect;
+
+impl ClipEffect {
+    /// Cria um efeito com intensidade inicial e parâmetros sincronizados (compatível com v0.1/v0.2).
+    pub fn new(kind: VideoEffectKind, intensity: f32) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            kind,
+            name: kind.default_name().to_string(),
+            intensity,
+            enabled: true,
+            params: EffectParameters::default_for_with_intensity(kind, intensity),
+        }
+    }
+
+    /// Cria um efeito usando os parâmetros padrão oficiais do seu tipo.
+    pub fn with_defaults(kind: VideoEffectKind) -> Self {
+        let params = EffectParameters::default_for(kind);
+        Self::with_params(params)
+    }
+
+    /// Cria um efeito a partir de parâmetros específicos já configurados.
+    pub fn with_params(params: EffectParameters) -> Self {
+        let kind = params.kind();
+        Self {
+            id: Uuid::new_v4(),
+            kind,
+            name: kind.default_name().to_string(),
+            intensity: params.primary_intensity(),
+            enabled: true,
+            params,
+        }
+    }
+
+    /// Rótulo curto para exibição em badges na timeline.
+    pub const fn short_badge_label(&self) -> &'static str {
+        self.params.short_badge_label()
+    }
+
+    /// Valor padrão de um parâmetro individual do efeito para reset seletivo.
+    pub fn default_param_value(&self, field: &str) -> Option<f64> {
+        self.params.default_value(field)
+    }
+
+    /// Valida consistência de tipo, intensidade normalizada e todos os parâmetros individuais.
     pub fn validate(&self) -> Result<(), TimelineError> {
         if !self.intensity.is_finite() || !(0.0..=1.0).contains(&self.intensity) {
             return Err(TimelineError::InvalidEffect {
@@ -132,7 +203,13 @@ impl ClipEffect {
                 reason: "deve ser finito e estar no intervalo [0.0, 1.0]",
             });
         }
-        Ok(())
+        if self.params.kind() != self.kind {
+            return Err(TimelineError::InvalidEffect {
+                field: "params",
+                reason: "parâmetros não correspondem ao tipo do efeito",
+            });
+        }
+        self.params.validate()
     }
 }
 

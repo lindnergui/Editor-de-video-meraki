@@ -4,11 +4,13 @@ mod audio_meter;
 mod clip_prepare;
 mod discoverer;
 mod effects_ges;
+mod effects_pixels;
 mod encoding_profiles;
 mod export_pipeline;
 mod exporter;
 mod frame_sink;
 mod keyframes_ges;
+mod live_commands;
 mod pipeline;
 mod playback_graph;
 #[cfg(test)]
@@ -18,6 +20,8 @@ mod proxy;
 mod proxy_cache;
 mod render_monitor;
 mod thumbnailer;
+mod timeline_sync;
+mod video_effects;
 
 pub use protocol::{
     AudioMeterFrame, BridgeError, EngineCommand, EngineEvent, EngineHandle, EngineWorkerChannel,
@@ -47,7 +51,8 @@ pub(crate) fn ensure_media_initialized() -> Result<(), String> {
     MEDIA_INIT
         .get_or_init(|| {
             gstreamer::init().map_err(|err| format!("gstreamer::init falhou: {err}"))?;
-            gstreamer_editing_services::init().map_err(|err| format!("ges::init falhou: {err}"))
+            gstreamer_editing_services::init().map_err(|err| format!("ges::init falhou: {err}"))?;
+            effects_pixels::register().map_err(|err| format!("falha ao registrar filtro de vídeo Meraki: {err}"))
         })
         .clone()
 }
@@ -118,8 +123,9 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
 
         context_ref.spawn_local(async move {
             let mut last_playhead_tick = Instant::now();
+            let mut live_edits = live_commands::LiveEdits::default();
             loop {
-                loop {
+                for _ in 0..64 {
                     match worker_poll.try_recv_command_checked() {
                         Ok(Some(EngineCommand::Shutdown)) | Err(BridgeError::EngineDisconnected) => {
                             info!("encerrando loop principal do motor multimídia");
@@ -130,7 +136,10 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
                             return;
                         }
                         Ok(Some(cmd)) => {
-                            handle_command(&mut playback, &exporter, &worker_poll, discover_tx_slot.as_ref(), cmd).await;
+                            if let Some(cmd) = live_edits.collect(cmd) {
+                                live_edits.flush(&mut playback, &worker_poll).await;
+                                handle_command(&mut playback, &exporter, &worker_poll, discover_tx_slot.as_ref(), cmd).await;
+                            }
                         }
                         Ok(None) => break,
                         Err(err) => {
@@ -143,8 +152,10 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
                         }
                     }
                 }
+                live_edits.flush(&mut playback, &worker_poll).await;
 
                 playback.poll_bus(&worker_poll);
+                playback.publish_shuttle_rate();
 
                 if let Some(seek_ns) = worker_poll.take_pending_seek() {
                     playback.queue_seek(seek_ns);
@@ -155,10 +166,13 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
                     worker_poll.emit_critical(EngineEvent::Error(err.to_string()));
                 }
 
-                if playback.is_playing() && last_playhead_tick.elapsed() >= Duration::from_millis(33) {
-                    if let Some(pos_ns) = playback.query_position_ns() {
-                        worker_poll.emit_drop_if_full(EngineEvent::PlayheadTick(pos_ns));
+                if last_playhead_tick.elapsed() >= Duration::from_millis(33) {
+                    if playback.is_playing() {
+                        if let Some(pos_ns) = playback.query_position_ns() {
+                            worker_poll.emit_drop_if_full(EngineEvent::PlayheadTick(pos_ns));
+                        }
                     }
+                    playback.publish_title_bounds();
                     last_playhead_tick = Instant::now();
                 }
 
@@ -225,6 +239,7 @@ async fn handle_command(
             playback.sync_timeline(clips, audio_mix, preview_quality).await
         }
         EngineCommand::Play => playback.play(),
+        EngineCommand::Shuttle { direction } => playback.shuttle(direction),
         EngineCommand::Pause => playback.pause(),
         EngineCommand::SetPlaybackRate(rate) => playback.set_playback_rate(rate),
         EngineCommand::SetMasterVolume(volume) => playback.set_master_volume(volume),
@@ -266,7 +281,7 @@ async fn handle_command(
             exporter.cancel(job_id);
             Ok(())
         }
-        EngineCommand::Shutdown => Ok(()),
+        EngineCommand::Shutdown | EngineCommand::UpdateClipLive { .. } => Ok(()),
     };
 
     if let Err(err) = result {

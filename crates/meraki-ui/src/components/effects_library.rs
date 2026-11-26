@@ -5,7 +5,9 @@ use iced::widget::{
     text_input, Column,
 };
 use iced::{Element, Length};
-use meraki_core::{Clip, TitleStyle, TransitionKind, VideoEffectKind};
+use meraki_core::{
+    Clip, EffectParameters, TitleStyle, TransitionEffectKind, TransitionKind, VideoEffectKind,
+};
 
 /// Seções expansíveis da biblioteca de efeitos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,15 +42,16 @@ impl Default for EffectsLibraryState {
 pub enum EffectsLibraryMessage {
     SearchChanged(String),
     ToggleSection(LibrarySection),
+    ApplyTransition(TransitionEffectKind),
     ToggleTransition(TransitionKind),
     AddTitle(TitleStyle),
     ToggleVideoEffect(VideoEffectKind),
 }
 
-const TRANSITIONS: [(TransitionKind, &str, &str, &str); 3] = [
-    (TransitionKind::Fade, "Fade", "Dissolver entrada suave", "fade dissolver transicao"),
-    (TransitionKind::Zoom, "Zoom", "Aproximação dinâmica", "zoom escala transicao"),
-    (TransitionKind::Blur, "Desfoque", "Transição com desfoque", "desfoque blur transicao"),
+const TRANSITIONS: [(TransitionEffectKind, TransitionKind, &str, &str, &str); 3] = [
+    (TransitionEffectKind::Fade, TransitionKind::Fade, "Fade", "Dissolver entrada e saída", "fade dissolver transicao"),
+    (TransitionEffectKind::ZoomTransition, TransitionKind::Zoom, "Zoom", "Aproximação dinâmica", "zoom escala transicao"),
+    (TransitionEffectKind::BlurTransition, TransitionKind::Blur, "Desfoque", "Transição com desfoque", "desfoque blur transicao"),
 ];
 
 const TITLES: [(TitleStyle, &str, &str, &str); 3] = [
@@ -57,10 +60,12 @@ const TITLES: [(TitleStyle, &str, &str, &str); 3] = [
     (TitleStyle::Title3D, "Título 3D", "Destaque em negrito 3D", "titulo 3d destaque"),
 ];
 
-const VIDEO_EFFECTS: [(VideoEffectKind, &str, &str, &str); 3] = [
-    (VideoEffectKind::Glitch, "Glitch", "Distúrbio digital estilizado", "glitch erro digital efeito"),
-    (VideoEffectKind::Cinematic, "Cinemático", "Contraste dramático de cinema", "cinematico cinema contraste"),
+const VIDEO_EFFECTS: [(VideoEffectKind, &str, &str, &str); 5] = [
+    (VideoEffectKind::Zoom, "Zoom", "Aproximação ou afastamento suave", "zoom escala aproximacao ken burns efeito"),
     (VideoEffectKind::FilmStyle, "Estilo Filme", "Paleta retrô de película", "estilo filme vintage retro"),
+    (VideoEffectKind::Cinematic, "Cinemático", "Contraste dramático de cinema", "cinematico cinema contraste"),
+    (VideoEffectKind::Glitch, "Glitch", "Distúrbio digital estilizado", "glitch erro digital efeito"),
+    (VideoEffectKind::Blur, "Desfoque", "Desfoque gaussiano ajustável", "desfoque blur suave efeito"),
 ];
 
 /// Verifica se um item da biblioteca corresponde ao termo buscado (sem distinção de maiúsculas/acentos).
@@ -118,17 +123,21 @@ pub fn view<'a>(
         LibrarySection::Transitions,
     ));
     if state.transitions_expanded {
-        for (kind, label, desc, kw) in TRANSITIONS {
+        for (effect_kind, legacy_kind, label, desc, kw) in TRANSITIONS {
             if matches_query(&state.search_query, label, kw) {
-                let active = selected_clip
-                    .and_then(|c| c.transition_in)
-                    .is_some_and(|tr| tr.kind == kind);
+                let active = selected_clip.is_some_and(|c| {
+                    c.transition_in.is_some_and(|tr| tr.kind == legacy_kind)
+                        || c.effects.iter().any(|ef| {
+                            ef.enabled
+                                && matches!(ef.params, EffectParameters::Transition(p) if p.kind == effect_kind)
+                        })
+                });
                 content = content.push(effect_card(
                     icons::TRANSITION,
                     label,
                     desc,
                     active,
-                    EffectsLibraryMessage::ToggleTransition(kind),
+                    EffectsLibraryMessage::ApplyTransition(effect_kind),
                 ));
             }
         }

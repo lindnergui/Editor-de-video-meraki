@@ -1,3 +1,4 @@
+use crate::effect_params::EffectParameters;
 use crate::effects::{
     ClipEffect, ClipTransition, Keyframe, KeyframeProperty, TitleOverlay, TransitionEdge,
     VideoEffectKind,
@@ -6,6 +7,7 @@ use crate::timeline::{
     ensure_no_overlap, validate_clip_timestamps, Clip, ClipId, Timeline, TimelineError, TrackId,
     TrackKind,
 };
+use uuid::Uuid;
 
 /// Valida título, efeitos, transições e keyframes de um clipe.
 pub(crate) fn validate_clip_extras(clip: &Clip) -> Result<(), TimelineError> {
@@ -179,13 +181,14 @@ impl Timeline {
         ClipEffect::new(kind, intensity).validate()?;
         let clip = self.clip_mut(clip_id).ok_or(TimelineError::ClipNotFound(clip_id))?;
         if let Some(existing) = clip.effects.iter_mut().find(|e| e.kind == kind) {
-            let prev = *existing;
+            let prev = existing.clone();
             existing.enabled = !existing.enabled;
             existing.intensity = intensity;
-            Ok((Some(prev), *existing))
+            existing.params.set_primary_intensity(intensity);
+            Ok((Some(prev), existing.clone()))
         } else {
             let added = ClipEffect::new(kind, intensity);
-            clip.effects.push(added);
+            clip.effects.push(added.clone());
             Ok((None, added))
         }
     }
@@ -199,13 +202,99 @@ impl Timeline {
         effect.validate()?;
         let clip = self.clip_mut(clip_id).ok_or(TimelineError::ClipNotFound(clip_id))?;
         if let Some(existing) = clip.effects.iter_mut().find(|e| e.kind == effect.kind) {
-            let prev = *existing;
+            let prev = existing.clone();
             *existing = effect;
             Ok(Some(prev))
         } else {
             clip.effects.push(effect);
             Ok(None)
         }
+    }
+
+    /// Adiciona uma instância individual de efeito a um clipe retornando seu `Uuid`.
+    pub fn add_clip_effect(
+        &mut self,
+        clip_id: ClipId,
+        effect: ClipEffect,
+    ) -> Result<Uuid, TimelineError> {
+        effect.validate()?;
+        let clip = self.clip_mut(clip_id).ok_or(TimelineError::ClipNotFound(clip_id))?;
+        let effect_id = effect.id;
+        clip.effects.push(effect);
+        Ok(effect_id)
+    }
+
+    /// Atualiza os parâmetros de um efeito específico (`effect_id`) retornando o estado anterior.
+    pub fn update_effect_params(
+        &mut self,
+        clip_id: ClipId,
+        effect_id: Uuid,
+        params: EffectParameters,
+    ) -> Result<ClipEffect, TimelineError> {
+        params.validate()?;
+        let clip = self.clip_mut(clip_id).ok_or(TimelineError::ClipNotFound(clip_id))?;
+        let effect = clip
+            .effects
+            .iter_mut()
+            .find(|e| e.id == effect_id)
+            .ok_or(TimelineError::EffectNotFound { clip_id, effect_id })?;
+        if params.kind() != effect.kind {
+            return Err(TimelineError::InvalidEffect {
+                field: "params",
+                reason: "parâmetros incompatíveis com o tipo do efeito",
+            });
+        }
+        let prev = effect.clone();
+        effect.params = params;
+        effect.intensity = params.primary_intensity();
+        Ok(prev)
+    }
+
+    /// Alterna `enabled` de um efeito identificado por `effect_id` retornando o estado anterior.
+    pub fn toggle_effect_by_id(
+        &mut self,
+        clip_id: ClipId,
+        effect_id: Uuid,
+    ) -> Result<bool, TimelineError> {
+        let clip = self.clip_mut(clip_id).ok_or(TimelineError::ClipNotFound(clip_id))?;
+        let effect = clip
+            .effects
+            .iter_mut()
+            .find(|e| e.id == effect_id)
+            .ok_or(TimelineError::EffectNotFound { clip_id, effect_id })?;
+        let prev = effect.enabled;
+        effect.enabled = !prev;
+        Ok(prev)
+    }
+
+    /// Remove um efeito por `effect_id` retornando `(índice_original, efeito_removido)`.
+    pub fn remove_effect_by_id(
+        &mut self,
+        clip_id: ClipId,
+        effect_id: Uuid,
+    ) -> Result<(usize, ClipEffect), TimelineError> {
+        let clip = self.clip_mut(clip_id).ok_or(TimelineError::ClipNotFound(clip_id))?;
+        let idx = clip
+            .effects
+            .iter()
+            .position(|e| e.id == effect_id)
+            .ok_or(TimelineError::EffectNotFound { clip_id, effect_id })?;
+        let removed = clip.effects.remove(idx);
+        Ok((idx, removed))
+    }
+
+    /// Reinsere um efeito na posição original (ou ao final) para suportar Undo determinístico.
+    pub fn insert_effect_at(
+        &mut self,
+        clip_id: ClipId,
+        index: usize,
+        effect: ClipEffect,
+    ) -> Result<(), TimelineError> {
+        effect.validate()?;
+        let clip = self.clip_mut(clip_id).ok_or(TimelineError::ClipNotFound(clip_id))?;
+        let pos = index.min(clip.effects.len());
+        clip.effects.insert(pos, effect);
+        Ok(())
     }
 
     /// Remove o efeito do tipo informado de um clipe, retornando-o caso existisse.

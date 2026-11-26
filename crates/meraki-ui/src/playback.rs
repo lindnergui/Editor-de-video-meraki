@@ -4,6 +4,7 @@ use iced::widget::image;
 use meraki_core::{AssetId, Clip, ClipId, MediaKind, PreviewQuality, Project, TrackId, TrackKind};
 use meraki_engine::{AudioMeterFrame, EngineCommand, EngineEvent, EngineHandle, TimelineRenderClip, TrackAudioMix};
 use tracing::{debug, error, info, warn};
+use std::collections::HashMap;
 
 /// Duração padrão aplicada caso o ativo ainda não tenha metadados descobertos.
 pub const DEFAULT_ASSET_CLIP_DURATION_NS: u64 = 5_000_000_000;
@@ -15,6 +16,8 @@ pub struct PlaybackState {
     pub is_playing: bool,
     pub playhead_ns: u64,
     pub playback_rate: f64,
+    pub shuttle_rate: f64,
+    pub(crate) title_bounds: HashMap<ClipId, meraki_core::NormalizedTitleBox>,
     pub master_volume: f32,
     pub preview_quality: PreviewQuality,
     pub selected_clip_id: Option<ClipId>,
@@ -34,6 +37,8 @@ impl PlaybackState {
             is_playing: false,
             playhead_ns: 0,
             playback_rate: 1.0,
+            shuttle_rate: 0.0,
+            title_bounds: HashMap::new(),
             master_volume: 1.0,
             preview_quality,
             selected_clip_id: None,
@@ -52,6 +57,7 @@ pub enum PlaybackMessage {
     TogglePlayPause,
     Play,
     Pause,
+    Shuttle(i8),
     Seek(u64),
     SetPlaybackRate(f64),
     SetMasterVolume(f32),
@@ -243,6 +249,7 @@ pub fn apply_transport_or_selection(
     match message {
         PlaybackMessage::TogglePlayPause => {
             playback.is_playing = !playback.is_playing;
+            if !playback.is_playing { playback.shuttle_rate = 0.0; }
             let cmd = if playback.is_playing { EngineCommand::Play } else { EngineCommand::Pause };
             engine.send(cmd).map_err(|err| err.to_string())
         }
@@ -252,7 +259,16 @@ pub fn apply_transport_or_selection(
         }
         PlaybackMessage::Pause => {
             playback.is_playing = false;
+            playback.shuttle_rate = 0.0;
             engine.send(EngineCommand::Pause).map_err(|err| err.to_string())
+        }
+        PlaybackMessage::Shuttle(direction) => {
+            if direction == 0 {
+                playback.is_playing = false;
+                playback.shuttle_rate = 0.0;
+                playback.playback_rate = 1.0;
+            }
+            engine.send(EngineCommand::Shuttle { direction }).map_err(|err| err.to_string())
         }
         PlaybackMessage::Seek(pos_ns) => {
             playback.playhead_ns = pos_ns;
@@ -346,6 +362,23 @@ pub fn apply_engine_event(
             playback.playhead_ns = position_ns;
             project.timeline.playhead_ns = position_ns;
         }
+        EngineEvent::ShuttleRateChanged { shuttle_rate } => {
+            playback.shuttle_rate = shuttle_rate;
+            playback.is_playing = shuttle_rate != 0.0;
+            if playback.is_playing {
+                playback.playback_rate = shuttle_rate;
+            } else if playback.playback_rate < 0.0 {
+                playback.playback_rate = 1.0;
+            }
+        }
+        EngineEvent::TitleBounds { clip_id, bounds } => {
+            if let Some(bounds) = bounds {
+                playback.title_bounds.insert(clip_id, bounds);
+            } else {
+                playback.title_bounds.remove(&clip_id);
+            }
+        }
+        EngineEvent::TimelineSyncRequired { .. } => {}
         EngineEvent::Error(message) => {
             error!(error = %message, "erro recebido do motor multimídia");
             *last_error = Some(message);

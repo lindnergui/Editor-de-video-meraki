@@ -1,6 +1,7 @@
+use crate::components::resettable_slider::{resettable_slider, ResettableSliderSpec};
 use crate::theme;
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, horizontal_rule, horizontal_space, row, scrollable, slider, text};
+use iced::widget::{button, column, container, horizontal_rule, horizontal_space, row, scrollable, text};
 use iced::{Element, Length};
 use meraki_core::{ClipId, ClipTransform, Project};
 
@@ -30,6 +31,7 @@ pub fn view<'a>(
             let tr = transform_draft
                 .filter(|(id, _)| *id == clip_id)
                 .map_or(clip.transform, |(_, draft)| draft);
+            let defaults = ClipTransform::default();
             let asset_name = project
                 .asset(clip.asset_id)
                 .map_or("Clipe", |asset| asset.name.as_str());
@@ -40,7 +42,7 @@ pub fn view<'a>(
                 button(text("Resetar").size(11).color(theme::TEXT_SECONDARY))
                     .padding([4, 8])
                     .style(theme::ghost_button)
-                    .on_press(InspectorMessage::UpdateTransform(clip_id, ClipTransform::default())),
+                    .on_press(InspectorMessage::UpdateTransform(clip_id, defaults)),
             ]
             .align_y(Vertical::Center);
 
@@ -57,54 +59,72 @@ pub fn view<'a>(
                 .padding(10)
                 .style(theme::card),
                 section_bar,
-                slider_control(
-                    "Escala",
-                    format!("{:.0}%", tr.scale * 100.0),
-                    0.10_f32..=3.0_f32,
-                    0.05_f32,
-                    tr.scale,
-                    move |scale| InspectorMessage::PreviewTransform(clip_id, ClipTransform { scale, ..tr }),
-                    InspectorMessage::CommitTransform(clip_id),
-                ),
-                slider_control(
-                    "Posição X",
-                    format!("{:.0} px", tr.pos_x),
-                    -960.0_f32..=960.0_f32,
-                    1.0_f32,
-                    tr.pos_x,
-                    move |pos_x| InspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_x, ..tr }),
-                    InspectorMessage::CommitTransform(clip_id),
-                ),
-                slider_control(
-                    "Posição Y",
-                    format!("{:.0} px", tr.pos_y),
-                    -540.0_f32..=540.0_f32,
-                    1.0_f32,
-                    tr.pos_y,
-                    move |pos_y| InspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_y, ..tr }),
-                    InspectorMessage::CommitTransform(clip_id),
-                ),
-                slider_control(
-                    "Opacidade",
-                    format!("{opacity_pct:.0}%"),
-                    0.0_f32..=100.0_f32,
-                    1.0_f32,
-                    opacity_pct,
-                    move |pct| {
+                resettable_slider(ResettableSliderSpec {
+                    label: "Escala",
+                    value_label: format!("{:.0}%", tr.scale * 100.0),
+                    range: 0.10_f32..=3.0_f32,
+                    step: 0.05_f32,
+                    current: tr.scale,
+                    on_change: Box::new(move |scale| {
+                        InspectorMessage::PreviewTransform(clip_id, ClipTransform { scale, ..tr })
+                    }),
+                    on_release: InspectorMessage::CommitTransform(clip_id),
+                    on_reset: InspectorMessage::UpdateTransform(clip_id, ClipTransform { scale: defaults.scale, ..tr }),
+                    trailing: None,
+                }),
+                resettable_slider(ResettableSliderSpec {
+                    label: "Posição X",
+                    value_label: format!("{:.0} px", tr.pos_x),
+                    range: -960.0_f32..=960.0_f32,
+                    step: 1.0_f32,
+                    current: tr.pos_x,
+                    on_change: Box::new(move |pos_x| {
+                        InspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_x, ..tr })
+                    }),
+                    on_release: InspectorMessage::CommitTransform(clip_id),
+                    on_reset: InspectorMessage::UpdateTransform(clip_id, ClipTransform { pos_x: defaults.pos_x, ..tr }),
+                    trailing: None,
+                }),
+                resettable_slider(ResettableSliderSpec {
+                    label: "Posição Y",
+                    value_label: format!("{:.0} px", tr.pos_y),
+                    range: -540.0_f32..=540.0_f32,
+                    step: 1.0_f32,
+                    current: tr.pos_y,
+                    on_change: Box::new(move |pos_y| {
+                        InspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_y, ..tr })
+                    }),
+                    on_release: InspectorMessage::CommitTransform(clip_id),
+                    on_reset: InspectorMessage::UpdateTransform(clip_id, ClipTransform { pos_y: defaults.pos_y, ..tr }),
+                    trailing: None,
+                }),
+                resettable_slider(ResettableSliderSpec {
+                    label: "Opacidade",
+                    value_label: format!("{opacity_pct:.0}%"),
+                    range: 0.0_f32..=100.0_f32,
+                    step: 1.0_f32,
+                    current: opacity_pct,
+                    on_change: Box::new(move |pct| {
                         let opacity = (pct / 100.0).clamp(0.0, 1.0);
                         InspectorMessage::PreviewTransform(clip_id, ClipTransform { opacity, ..tr })
-                    },
-                    InspectorMessage::CommitTransform(clip_id),
-                ),
-                slider_control(
-                    "Velocidade",
-                    format!("{:.2}x", tr.speed),
-                    0.25_f32..=4.0_f32,
-                    0.05_f32,
-                    tr.speed,
-                    move |speed| InspectorMessage::PreviewTransform(clip_id, ClipTransform { speed, ..tr }),
-                    InspectorMessage::CommitTransform(clip_id),
-                ),
+                    }),
+                    on_release: InspectorMessage::CommitTransform(clip_id),
+                    on_reset: InspectorMessage::UpdateTransform(clip_id, ClipTransform { opacity: defaults.opacity, ..tr }),
+                    trailing: None,
+                }),
+                resettable_slider(ResettableSliderSpec {
+                    label: "Velocidade",
+                    value_label: format!("{:.2}x", tr.speed),
+                    range: 0.25_f32..=4.0_f32,
+                    step: 0.05_f32,
+                    current: tr.speed,
+                    on_change: Box::new(move |speed| {
+                        InspectorMessage::PreviewTransform(clip_id, ClipTransform { speed, ..tr })
+                    }),
+                    on_release: InspectorMessage::CommitTransform(clip_id),
+                    on_reset: InspectorMessage::UpdateTransform(clip_id, ClipTransform { speed: defaults.speed, ..tr }),
+                    trailing: None,
+                }),
             ]
             .spacing(12)
             .width(Length::Fill);
@@ -141,36 +161,5 @@ pub fn view<'a>(
     .height(Length::Fill)
     .padding(14)
     .style(theme::sidebar)
-    .into()
-}
-
-fn slider_control<'a>(
-    label: &'a str,
-    value_label: String,
-    range: std::ops::RangeInclusive<f32>,
-    step: f32,
-    current: f32,
-    on_change: impl Fn(f32) -> InspectorMessage + 'a,
-    on_release: InspectorMessage,
-) -> Element<'a, InspectorMessage> {
-    container(
-        column![
-            row![
-                text(label).size(12).font(theme::FONT_MEDIUM).color(theme::TEXT_PRIMARY),
-                horizontal_space(),
-                text(value_label).size(11).font(theme::FONT_SEMIBOLD).color(theme::ACCENT_HOVER),
-            ]
-            .align_y(Vertical::Center),
-            slider(range, current, on_change)
-                .step(step)
-                .on_release(on_release)
-                .width(Length::Fill)
-                .style(theme::preview_slider),
-        ]
-        .spacing(6),
-    )
-    .width(Length::Fill)
-    .padding([8, 10])
-    .style(theme::card)
     .into()
 }

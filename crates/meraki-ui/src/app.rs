@@ -17,9 +17,9 @@ use crate::{subscription, theme};
 use iced::widget::{column, container, horizontal_rule, image, row, vertical_rule};
 use iced::{Element, Length, Subscription, Task, Theme};
 use meraki_core::{
-    AddAssetCommand, AddClipCommand, AppPreferences, AssetId, ClipId, ClipTransform, Command,
+    AddAssetCommand, AddClipCommand, AppPreferences, AssetId, ClipId, Command,
     FolderId, HistoryError, HistoryStack, MediaAsset, MoveClipCommand, PreviewQuality, Project,
-    RemoveClipCommand, SplitClipCommand, TrackId, TrimClipCommand, UpdateClipTransformCommand,
+    RemoveClipCommand, SplitClipCommand, TrackId, TrimClipCommand,
 };
 use meraki_engine::{BridgeError, EngineCommand, EngineEvent, EngineHandle};
 use std::path::PathBuf;
@@ -195,10 +195,6 @@ impl MerakiApp {
         Ok(right_id)
     }
 
-    pub fn update_clip_transform(&mut self, clip_id: ClipId, transform: ClipTransform) -> Result<(), String> {
-        self.execute_timeline_command(Box::new(UpdateClipTransformCommand::new(clip_id, transform)))
-    }
-
     pub fn remove_clip(&mut self, clip_id: ClipId) -> Result<(), String> {
         self.execute_timeline_command(Box::new(RemoveClipCommand::new(clip_id)))
     }
@@ -242,6 +238,7 @@ impl MerakiApp {
         self.effects.title_draft = None;
         self.effects.title_font_size_draft = None;
         self.effects.transform_draft = None;
+        self.effects.effect_params_draft = None;
     }
 
     pub fn request_shutdown(&self) -> Result<(), BridgeError> { self.engine.send(EngineCommand::Shutdown) }
@@ -313,6 +310,12 @@ impl MerakiApp {
     }
 
     pub(crate) fn execute_timeline_command(&mut self, command: Box<dyn Command>) -> Result<(), String> {
+        self.record_timeline_command(command)?;
+        self.dispatch_timeline_sync();
+        Ok(())
+    }
+
+    pub(crate) fn record_timeline_command(&mut self, command: Box<dyn Command>) -> Result<(), String> {
         if let Err(err) = self.history.execute(command, &mut self.project) {
             let message = err.to_string();
             self.last_error = Some(message.clone());
@@ -320,26 +323,28 @@ impl MerakiApp {
         }
         self.prune_selected_clip();
         self.mark_project_dirty();
-        self.dispatch_timeline_sync();
         Ok(())
     }
 
-    fn dispatch_timeline_sync(&mut self) {
+    pub(crate) fn dispatch_timeline_sync(&mut self) {
         if let Err(err) = self.sync_timeline_to_engine() {
             self.last_error = Some(err.to_string());
         }
     }
 
     fn prune_selected_clip(&mut self) {
-        if let Some(selected) = self.playback.selected_clip_id {
-            if self.project.timeline.clip(selected).is_none() {
-                self.playback.selected_clip_id = None;
-            }
+        self.playback.title_bounds.retain(|id, _| self.project.timeline.clip(*id).is_some());
+        if self.playback.selected_clip_id.is_some_and(|id| self.project.timeline.clip(id).is_none()) {
+            self.playback.selected_clip_id = None;
         }
+        self.reconcile_selected_effect();
     }
 
     fn handle_engine_event(&mut self, event: EngineEvent) {
         match event {
+            EngineEvent::TimelineSyncRequired { clip_id } if self.project.timeline.clip(clip_id).is_some() => {
+                self.dispatch_timeline_sync();
+            }
             EngineEvent::ExportProgress { .. }
             | EngineEvent::ExportFinished { .. }
             | EngineEvent::ExportFailed { .. }
