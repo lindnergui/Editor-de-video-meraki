@@ -1,5 +1,5 @@
-use meraki_core::{AssetId, ClipTransform, TrackId, TransitionKind};
-use meraki_engine::{EngineCommand, EngineEvent, ProxyMode};
+use meraki_core::{AssetId, ClipTransform, TrackId, TransitionKind, TransitionPlacement};
+use meraki_engine::{EngineCommand, EngineEvent, ProxyMode, TimelineTransition, VideoFrame};
 use std::fs;
 
 #[path = "v04/support.rs"]
@@ -116,35 +116,66 @@ fn blur_and_zoom_peak_on_both_sides_of_the_cut_and_leave_the_middle_unchanged() 
     b.source_in_ns = 100_000_000;
     let engine = start_engine();
     let timing = [SECOND, 1_900_000_000, 2_100_000_000, 3 * SECOND];
-    sync(&engine, vec![a.clone(), b.clone()], Vec::new());
-    first_frame(&engine);
-    let baseline = timing.map(|time| seek(&engine, time));
-    let delta = |left: &meraki_engine::VideoFrame, right: &meraki_engine::VideoFrame| {
-        left.rgba_pixels
-            .iter()
-            .zip(&right.rgba_pixels)
-            .step_by(28)
-            .map(|(&a, &b)| u64::from(a.abs_diff(b)))
-            .sum::<u64>()
-    };
     for kind in [TransitionKind::Zoom, TransitionKind::Blur] {
-        let mut transitions = placement(&a, &b, kind);
-        transitions.remove(2);
-        transitions.remove(0);
-        sync(&engine, vec![a.clone(), b.clone()], transitions);
-        first_frame(&engine);
-        let actual = timing.map(|time| seek(&engine, time));
-        let differences = std::array::from_fn::<_, 4, _>(|i| delta(&baseline[i], &actual[i]));
-        assert!(
-            differences[1] > 150_000 && differences[2] > 150_000,
-            "{kind:?}: {differences:?}"
-        );
-        assert!(
-            differences[0] < differences[1] / 10 && differences[3] < differences[2] / 10,
-            "{kind:?}: {differences:?}"
-        );
+        let capture = |transitions| {
+            sync(&engine, vec![a.clone(), b.clone()], transitions);
+            first_frame(&engine);
+            timing.map(|time| seek(&engine, time))
+        };
+        // As rampas ficam nas extremidades externas para manter os mesmos filtros
+        // e a mesma conversão de cor, com intensidade zero nos quadros de referência.
+        let baseline = capture(vec![
+            TimelineTransition::new(
+                track,
+                kind,
+                TransitionPlacement::ClipStart {
+                    clip_id: a.clip_id.0,
+                },
+                400_000_000,
+            ),
+            TimelineTransition::new(
+                track,
+                kind,
+                TransitionPlacement::ClipEnd {
+                    clip_id: b.clip_id.0,
+                },
+                400_000_000,
+            ),
+        ]);
+        let actual = capture(vec![TimelineTransition::new(
+            track,
+            kind,
+            TransitionPlacement::BetweenClips {
+                left_clip_id: a.clip_id.0,
+                right_clip_id: b.clip_id.0,
+            },
+            800_000_000,
+        )]);
+        for (index, time) in timing.into_iter().enumerate() {
+            let difference = mean_rgb_difference(&baseline[index], &actual[index]);
+            if (1_600_000_000..2_400_000_000).contains(&time) {
+                assert!(difference > 3.0, "{kind:?} em {time} ns: {difference}");
+            } else {
+                assert_eq!(difference, 0.0, "{kind:?} em {time} ns");
+            }
+        }
     }
     shutdown(engine);
+}
+
+fn mean_rgb_difference(left: &VideoFrame, right: &VideoFrame) -> f64 {
+    assert_eq!((left.width, left.height), (right.width, right.height));
+    let (left_pixels, left_remainder) = left.rgba_pixels.as_chunks::<4>();
+    let (right_pixels, right_remainder) = right.rgba_pixels.as_chunks::<4>();
+    assert!(left_remainder.is_empty() && right_remainder.is_empty());
+    assert_eq!(left_pixels.len(), right_pixels.len());
+    let difference: u64 = left_pixels
+        .iter()
+        .zip(right_pixels)
+        .flat_map(|(a, b)| a[..3].iter().zip(&b[..3]))
+        .map(|(&a, &b)| u64::from(a.abs_diff(b)))
+        .sum();
+    difference as f64 / (left_pixels.len() * 3) as f64
 }
 
 fn assert_red(pixel: [u8; 3]) {
