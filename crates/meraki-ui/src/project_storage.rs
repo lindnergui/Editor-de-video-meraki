@@ -1,9 +1,12 @@
+use crate::app_preferences::save_preferences_to;
+use crate::app_project_io::autosave_path;
 use meraki_core::{AppPreferences, Project};
 use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
+use uuid::Uuid;
 
 /// Resolve o diretório interno padrão onde projetos `.meraki` são gerenciados automaticamente.
 pub fn internal_projects_dir() -> PathBuf {
@@ -70,11 +73,11 @@ pub fn delete_managed_project_if_internal(dir: &Path, path: &Path) -> Result<boo
 }
 
 fn is_meraki_file(path: &Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("meraki"))
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let lower = name.to_ascii_lowercase();
+    path.is_file() && lower.ends_with(".meraki") && !lower.ends_with(".autosave.meraki")
 }
 
 fn file_modified_unix_secs(path: &Path) -> u64 {
@@ -144,4 +147,94 @@ pub(crate) fn sync_project_file_name_on_disk(path: &Path, new_name: &str) -> Res
     disk_proj.rename(new_name).map_err(|err| err.to_string())?;
     let json = disk_proj.to_json().map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| format!("Falha ao atualizar .meraki: {err}"))
+}
+
+fn same_file_path(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
+
+fn read_project_id(path: &Path) -> Option<Uuid> {
+    let raw = fs::read_to_string(path).ok()?;
+    Project::from_json(&raw).ok().map(|proj| proj.id)
+}
+
+fn remove_linked_recovery_files(path: &Path, project_id: Option<Uuid>) -> Result<(), String> {
+    let autosave = autosave_path();
+    if autosave.is_file() {
+        let matches_id = project_id.is_some_and(|id| read_project_id(&autosave) == Some(id));
+        if matches_id {
+            fs::remove_file(&autosave)
+                .map_err(|err| format!("Falha ao remover cópia de recuperação: {err}"))?;
+        }
+    }
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let mut candidates = Vec::new();
+    if !stem.is_empty() {
+        candidates.push(parent.join(format!("{stem}.autosave.meraki")));
+        candidates.push(parent.join(format!("{stem}.meraki.bak")));
+        candidates.push(parent.join(format!("{stem}.meraki.tmp")));
+    }
+    if let Some(id) = project_id {
+        candidates.push(parent.join(format!("{id}.autosave.meraki")));
+    }
+    for candidate in candidates {
+        if candidate.is_file() {
+            fs::remove_file(&candidate)
+                .map_err(|err| format!("Falha ao remover arquivo auxiliar de projeto: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Apaga definitivamente um projeto `.meraki`, arquivos de recuperação vinculados e sua entrada em `preferences.json`.
+pub fn delete_project_permanently_with_prefs(
+    path: &Path,
+    prefs_path: &Path,
+    preferences: &mut AppPreferences,
+) -> Result<(), String> {
+    let project_id = read_project_id(path).or_else(|| {
+        preferences
+            .recent_projects
+            .iter()
+            .find(|entry| same_file_path(&entry.path, path))
+            .map(|entry| entry.id)
+    });
+
+    let matching_paths: Vec<PathBuf> = preferences
+        .recent_projects
+        .iter()
+        .filter(|entry| same_file_path(&entry.path, path))
+        .map(|entry| entry.path.clone())
+        .collect();
+    let mut changed = preferences.remove_recent(path);
+    for matched in matching_paths {
+        changed |= preferences.remove_recent(&matched);
+    }
+    if changed || prefs_path.is_file() {
+        save_preferences_to(prefs_path, preferences)?;
+    }
+
+    if path.is_file() {
+        fs::remove_file(path)
+            .map_err(|err| format!("Falha ao excluir arquivo .meraki do disco: {err}"))?;
+    }
+    remove_linked_recovery_files(path, project_id)?;
+    Ok(())
+}
+
+/// Apaga definitivamente um projeto `.meraki` atualizando o `preferences.json` padrão da plataforma.
+pub fn delete_project_permanently(
+    path: &Path,
+    preferences: &mut AppPreferences,
+) -> Result<(), String> {
+    delete_project_permanently_with_prefs(path, &crate::app_preferences::preferences_path(), preferences)
 }

@@ -101,7 +101,7 @@ pub(crate) fn select_proxy_plugins(include_audio: bool) -> Result<ProxyPlugins, 
             hint: "gst-plugins-good",
         },
     )?;
-    let video_encoder = find_first_factory(&H264_ENCODERS).ok_or(
+    let video_encoder = find_first_factory(&["x264enc", "openh264enc"]).or_else(|| find_first_factory(&H264_ENCODERS)).ok_or(
         ExportProfileError::MissingEssentialPlugin {
             role: "encoder H.264 para proxy",
             candidates: "d3d11h264enc, mfh264enc, nvh264enc, qsvh264enc, vaapih264enc, x264enc, openh264enc",
@@ -109,11 +109,11 @@ pub(crate) fn select_proxy_plugins(include_audio: bool) -> Result<ProxyPlugins, 
         },
     )?;
     let audio_encoder = if include_audio {
-        let found = find_first_factory(&AAC_ENCODERS);
-        if found.is_none() {
-            warn!("encoder AAC ausente; gerando proxy 720p somente com vídeo");
-        }
-        found
+        Some(find_first_factory(&AAC_ENCODERS).ok_or(ExportProfileError::MissingEssentialPlugin {
+            role: "encoder AAC para proxy",
+            candidates: "voaacenc, mfaacenc, mf_aacenc, faac, avenc_aac",
+            hint: "gst-plugins-bad ou gst-libav",
+        })?)
     } else {
         None
     };

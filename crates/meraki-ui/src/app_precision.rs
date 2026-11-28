@@ -132,7 +132,9 @@ impl MerakiApp {
     pub(crate) fn handle_playback_message(&mut self, message: PlaybackMessage) {
         match message {
             PlaybackMessage::DeleteSelectedClip => {
-                if let Some(clip_id) = self.playback.selected_clip_id {
+                if let Some(tr_id) = self.playback.selected_transition_id {
+                    let _ = self.remove_transition(tr_id);
+                } else if let Some(clip_id) = self.playback.selected_clip_id {
                     let _ = self.remove_clip(clip_id);
                 }
             }

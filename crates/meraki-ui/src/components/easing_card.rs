@@ -1,10 +1,11 @@
+use crate::i18n;
 use crate::theme;
 use iced::alignment::Horizontal;
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::{button, column, container, row, text};
 use iced::{Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Theme};
-use meraki_core::KeyframeEasing;
+use meraki_core::{AppLanguage, KeyframeEasing};
 
 const QUICK_COLORS: [[u8; 4]; 6] = [
     [255, 255, 255, 255],
@@ -18,11 +19,13 @@ const QUICK_COLORS: [[u8; 4]; 6] = [
 /// Renderiza os dois cartões gráficos de interpolação (`Linear` e `Suave [Ease]`).
 pub fn easing_selector<'a, M: Clone + 'a>(
     active: KeyframeEasing,
+    lang: AppLanguage,
     on_select: impl Fn(KeyframeEasing) -> M + Copy + 'a,
 ) -> Element<'a, M> {
+    let s = i18n::strings(lang);
     row![
-        curve_card("Linear", KeyframeEasing::Linear, active == KeyframeEasing::Linear, on_select),
-        curve_card("Suave [Ease]", KeyframeEasing::EaseInOut, active == KeyframeEasing::EaseInOut, on_select),
+        curve_card(s.inspector_linear, KeyframeEasing::Linear, active == KeyframeEasing::Linear, on_select),
+        curve_card(s.inspector_ease_card, KeyframeEasing::EaseInOut, active == KeyframeEasing::EaseInOut, on_select),
     ]
     .spacing(8)
     .width(Length::Fill)

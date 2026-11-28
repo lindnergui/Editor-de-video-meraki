@@ -1,5 +1,5 @@
 use crate::app::MerakiApp;
-use meraki_core::{AppPreferences, KeymapProfile};
+use meraki_core::{AppLanguage, AppPreferences, KeymapProfile};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -73,9 +73,23 @@ fn current_unix_secs() -> u64 {
 }
 
 impl MerakiApp {
+    pub(crate) fn apply_proxy_preference(&mut self) {
+        if self.preferences.proxy_mode != meraki_core::ProxyMode::default() {
+            if let Err(err) = self.engine.send(meraki_engine::EngineCommand::SetProxyMode(self.preferences.proxy_mode)) {
+                self.last_error = Some(err.to_string());
+            }
+        }
+    }
+
     /// Substitui o caminho de persistência de preferências (útil para isolamento em testes).
     pub fn set_preferences_path(&mut self, path: PathBuf) {
         self.preferences_path = path;
+    }
+
+    /// Atualiza o idioma ativo da interface e persiste imediatamente no `preferences.json`.
+    pub fn set_language(&mut self, language: AppLanguage) -> Result<(), String> {
+        self.preferences.language = language;
+        save_preferences_to(&self.preferences_path, &self.preferences)
     }
 
     /// Atualiza o perfil de atalhos ativo e persiste imediatamente no `preferences.json`.

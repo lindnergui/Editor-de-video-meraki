@@ -1,7 +1,7 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use meraki_core::AssetId;
-use meraki_engine::{spawn_engine, EngineCommand, EngineEvent, ThumbnailFrame};
+use meraki_engine::{spawn_engine, EngineCommand, EngineEvent, ProxyMode, ThumbnailFrame};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct FixtureGuard {
     dir: PathBuf,
-    cleanup_proxies: Vec<AssetId>,
+    cleanup_proxies: Vec<PathBuf>,
 }
 
 impl FixtureGuard {
@@ -27,11 +27,8 @@ impl FixtureGuard {
 impl Drop for FixtureGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.dir);
-        let proxy_dir = std::env::temp_dir().join("meraki-proxies");
-        for id in &self.cleanup_proxies {
-            let _ = fs::remove_file(proxy_dir.join(format!("{id}_720p.mp4")));
-            let _ = fs::remove_file(proxy_dir.join(format!("{id}_720p.meta")));
-            let _ = fs::remove_file(proxy_dir.join(format!("{id}_720p.part.mp4")));
+        for path in &self.cleanup_proxies {
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -124,10 +121,10 @@ fn engine_extracts_rgba_thumbnails_generates_720p_proxy_and_reuses_disk_cache() 
     let handle = spawn_engine();
     let ready = handle.events().recv_timeout(Duration::from_secs(30)).expect("EngineReady");
     assert!(matches!(ready, EngineEvent::EngineReady));
+    handle.send(EngineCommand::SetProxyMode(ProxyMode::Always)).unwrap();
 
-    // 1. Vídeo 1080p -> MediaDiscovered + ThumbnailReady + ProxyProgress 1.0 (1280x720)
+    // 1. Vídeo 1080p no modo Always gera miniatura e proxy 1280 × 720.
     let id1 = AssetId::new();
-    guard.cleanup_proxies.push(id1);
     handle
         .send(EngineCommand::ImportMedia {
             asset_id: id1,
@@ -146,26 +143,26 @@ fn engine_extracts_rgba_thumbnails_generates_720p_proxy_and_reuses_disk_cache() 
                     saw_meta1 = true;
                 }
                 EngineEvent::ThumbnailReady(t) if t.asset_id == id1 => thumb1 = Some(t),
-                EngineEvent::ProxyProgress { asset_id, progress, proxy_path: Some(p) }
-                    if asset_id == id1 && (progress - 1.0).abs() < f32::EPSILON =>
+                EngineEvent::ProxyReady { asset_id, proxy_path: p } if asset_id == id1 =>
                 {
                     proxy1 = Some(p);
                 }
                 EngineEvent::Error(err) => panic!("erro inesperado no import 1: {err}"),
+                EngineEvent::ProxyFailed { reason, .. } => panic!("proxy 1080p: {reason}"),
                 _ => {}
             }
         }
     }
     assert!(saw_meta1, "MediaDiscovered esperado para vídeo 1080p");
     assert_valid_thumb(thumb1.as_ref().expect("ThumbnailReady esperado para vídeo"), id1);
-    let proxy1_path = proxy1.expect("ProxyProgress final esperado");
+    let proxy1_path = proxy1.expect("ProxyReady esperado");
+    guard.cleanup_proxies.push(proxy1_path.clone());
     assert!(proxy1_path.is_file());
     let proxy1_len = fs::metadata(&proxy1_path).unwrap().len();
     assert!(proxy1_len > 1024);
 
     // 2. Valida dimensões do proxy gerado e reutilização do cache ao reimportar o mesmo vídeo
     let id2 = AssetId::new();
-    guard.cleanup_proxies.push(id2);
     handle
         .send(EngineCommand::ImportMedia {
             asset_id: id2,
@@ -177,7 +174,7 @@ fn engine_extracts_rgba_thumbnails_generates_720p_proxy_and_reuses_disk_cache() 
     handle
         .send(EngineCommand::ImportMedia {
             asset_id: verify_id,
-            path: proxy1_path,
+            path: proxy1_path.clone(),
             generate_proxy: false,
         })
         .unwrap();
@@ -195,19 +192,20 @@ fn engine_extracts_rgba_thumbnails_generates_720p_proxy_and_reuses_disk_cache() 
                     verified_proxy_dims = true;
                 }
                 EngineEvent::ThumbnailReady(t) if t.asset_id == id2 => thumb2 = Some(t),
-                EngineEvent::ProxyProgress { asset_id, progress, proxy_path: Some(p) }
-                    if asset_id == id2 && (progress - 1.0).abs() < f32::EPSILON =>
+                EngineEvent::ProxyReady { asset_id, proxy_path: p } if asset_id == id2 =>
                 {
                     proxy2 = Some(p);
                 }
                 EngineEvent::Error(err) => panic!("erro inesperado no cache hit: {err}"),
+                EngineEvent::ProxyFailed { reason, .. } => panic!("proxy do cache: {reason}"),
                 _ => {}
             }
         }
     }
     assert!(saw_meta2 && verified_proxy_dims);
     assert_valid_thumb(thumb2.as_ref().expect("ThumbnailReady no reimport"), id2);
-    let proxy2_path = proxy2.expect("cache hit de proxy deve emitir ProxyProgress 1.0");
+    let proxy2_path = proxy2.expect("cache hit de proxy deve emitir ProxyReady");
+    assert_eq!(proxy2_path, proxy1_path);
     assert_eq!(fs::metadata(&proxy2_path).unwrap().len(), proxy1_len);
 
     // 3. Imagem PNG + Áudio WAV (áudio não gera erro nem trava)

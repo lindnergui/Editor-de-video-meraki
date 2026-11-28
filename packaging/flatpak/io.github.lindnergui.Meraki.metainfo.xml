@@ -31,6 +31,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.0" date="2026-11-27">
+      <description>
+        <p>Release v0.4.0 featuring real-time zero-delay audio and mixer controls, a 4-band parametric equalizer with a live spectrum visualizer, double-click individual reset on EQ bands and mixer faders, 6 curated audio presets including Speech/YouTube and Music, Auto-EQ for voice and music, positional timeline transitions with a dedicated Transition Inspector, bilingual PT-BR/EN interface, and proxy cache controls.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-26">
       <description>
         <p>Release v0.3.0 introducing real-time preview while dragging inspector sliders, double-click individual parameter reset, J/K/L shuttle playback shortcuts, an individual effect inspector with quick Zoom presets, visual FX badges on timeline clips, a fix for duplicate title text in the preview overlay, and direct timeline clicking to position the playhead.</p>

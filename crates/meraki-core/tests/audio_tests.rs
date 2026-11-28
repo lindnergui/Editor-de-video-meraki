@@ -191,6 +191,7 @@ fn history_stack_supports_undo_redo_across_all_audio_commands_and_split() {
         noise_reduction_strength: 0.7,
         voice_leveler_enabled: true,
         voice_preset: None,
+        audio_preset: None,
         effects: vec![],
     };
     history

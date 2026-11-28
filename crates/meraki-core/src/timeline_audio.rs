@@ -1,4 +1,9 @@
-use crate::audio::{AudioEffectKind, TrackAudioSettings, VoicePreset, VolumeKeyframe};
+use crate::audio::{
+    eq_band_index, AudioEffectKind, TrackAudioSettings, VoicePreset, VolumeKeyframe,
+    MAX_TRACK_GAIN_DB, MIN_TRACK_GAIN_DB,
+};
+use crate::audio_eq::AudioPreset;
+use crate::project::EqBand;
 use crate::timeline::{Clip, ClipId, Timeline, TimelineError, TrackId, TrackKind};
 
 const MIXER_TRACK_NAMES: [&str; 3] = ["A1 Voz", "A2 Música", "A3 SFX"];
@@ -75,7 +80,85 @@ impl Timeline {
             .clone();
         let mut next = current;
         preset.apply_to(&mut next);
+        next.audio_preset = Some(AudioPreset::from_voice_preset(preset));
         self.update_track_audio(track_id, next)
+    }
+
+    /// Atualiza as 4 bandas de EQ da trilha validando o intervalo `[-12.0, +12.0] dB`.
+    pub fn set_track_eq(
+        &mut self,
+        track_id: TrackId,
+        eq_gains_db: [f32; 4],
+    ) -> Result<TrackAudioSettings, TimelineError> {
+        let mut next = self
+            .track(track_id)
+            .ok_or(TimelineError::TrackNotFound(track_id))?
+            .audio
+            .clone();
+        next.eq_gains_db = eq_gains_db;
+        next.audio_preset = None;
+        next.voice_preset = None;
+        self.update_track_audio(track_id, next)
+    }
+
+    /// Reseta uma única banda do equalizador para `0.0 dB` preservando as demais.
+    pub fn reset_eq_band(
+        &mut self,
+        track_id: TrackId,
+        band: EqBand,
+    ) -> Result<TrackAudioSettings, TimelineError> {
+        let mut next = self
+            .track(track_id)
+            .ok_or(TimelineError::TrackNotFound(track_id))?
+            .audio
+            .clone();
+        next.eq_gains_db[eq_band_index(band)] = 0.0;
+        next.audio_preset = None;
+        next.voice_preset = None;
+        self.update_track_audio(track_id, next)
+    }
+
+    /// Aplica um `AudioPreset` sobre a trilha retornando as configurações anteriores.
+    pub fn apply_audio_preset(
+        &mut self,
+        track_id: TrackId,
+        preset: AudioPreset,
+    ) -> Result<TrackAudioSettings, TimelineError> {
+        let mut next = self
+            .track(track_id)
+            .ok_or(TimelineError::TrackNotFound(track_id))?
+            .audio
+            .clone();
+        preset.apply_to(&mut next);
+        self.update_track_audio(track_id, next)
+    }
+
+    /// Atualiza o fader (em dB) de uma trilha sincronizando `track.gain_db` e `track.audio.gain_db`.
+    pub fn set_track_volume(
+        &mut self,
+        track_id: TrackId,
+        gain_db: f32,
+    ) -> Result<TrackAudioSettings, TimelineError> {
+        let mut next = self
+            .track(track_id)
+            .ok_or(TimelineError::TrackNotFound(track_id))?
+            .audio
+            .clone();
+        next.gain_db = gain_db;
+        self.update_track_audio(track_id, next)
+    }
+
+    /// Atualiza o volume Master da timeline em dB (`-60.0` a `+12.0`).
+    pub fn set_master_volume(&mut self, gain_db: f32) -> Result<f32, TimelineError> {
+        if !gain_db.is_finite() || !(MIN_TRACK_GAIN_DB..=MAX_TRACK_GAIN_DB).contains(&gain_db) {
+            return Err(TimelineError::InvalidAudioSetting {
+                field: "master_gain_db",
+                reason: "ganho master deve estar entre -60.0 e +12.0 dB",
+            });
+        }
+        let previous = self.master_gain_db;
+        self.master_gain_db = gain_db;
+        Ok(previous)
     }
 
     /// Habilita ou desabilita um efeito de áudio (`Reverb`/`Echo`) na trilha.

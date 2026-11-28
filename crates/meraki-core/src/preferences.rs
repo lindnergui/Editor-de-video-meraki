@@ -132,6 +132,23 @@ pub struct RecentProjectEntry {
     pub last_opened_unix_secs: u64,
 }
 
+/// Idioma ativo da interface do Meraki.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AppLanguage {
+    #[default]
+    PtBr,
+    EnUs,
+}
+
+/// Modo de geração e uso de proxies 720p no editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ProxyMode {
+    #[default]
+    AutoAbove1080p,
+    Always,
+    Off,
+}
+
 /// Preferências globais do aplicativo persistidas pelo shell fora do domínio puro.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -139,6 +156,8 @@ pub struct AppPreferences {
     pub keymap: KeymapProfile,
     pub onboarding_completed: bool,
     pub recent_projects: Vec<RecentProjectEntry>,
+    pub language: AppLanguage,
+    pub proxy_mode: ProxyMode,
 }
 
 impl AppPreferences {

@@ -1,4 +1,6 @@
+use crate::components::resettable_slider::double_click_target;
 use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::playback::PlaybackState;
 use crate::theme;
 use iced::alignment::{Horizontal, Vertical};
@@ -10,7 +12,7 @@ use iced::widget::{
     button, column, container, horizontal_rule, row, text, vertical_rule, vertical_slider,
 };
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
-use meraki_core::{Track, TrackId, TrackKind, MAX_TRACK_GAIN_DB};
+use meraki_core::{AppLanguage, Track, TrackId, TrackKind, MAX_TRACK_GAIN_DB};
 
 pub const MIXER_MIN_GAIN_DB: f32 = -48.0;
 const METER_MIN_DB: f32 = -60.0;
@@ -24,6 +26,10 @@ pub enum MixerMessage {
     ToggleSolo(TrackId),
     TrackGainChanged { track_id: TrackId, gain_db: f32 },
     TrackGainReleased(TrackId),
+    TrackGainReset(TrackId),
+    MasterGainChanged(f32),
+    MasterGainReleased,
+    MasterGainReset,
     MasterVolumeChanged(f32),
 }
 
@@ -38,16 +44,20 @@ pub fn db_meter_segment_color(db: f32) -> Color {
     }
 }
 
-/// Renderiza o Mixer vertical à direita (`250px`, `#181922`) com trilhas reais + canal `MASTER`.
+/// Renderiza o Mixer vertical à direita (`276px`, `#181922`) com trilhas reais + canal `MASTER`.
 pub fn view<'a>(
     audio_tracks: &[&'a Track],
     selected_track_id: Option<TrackId>,
+    master_gain_db: f32,
     playback: &'a PlaybackState,
+    lang: AppLanguage,
 ) -> Element<'a, MixerMessage> {
-    let header = text("MIXER DE ÁUDIO")
+    let s = i18n::strings(lang);
+    let header = text(s.audio_mixer_title)
         .size(11)
         .font(theme::FONT_BOLD)
-        .color(theme::TEXT_SECONDARY);
+        .color(theme::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None);
 
     let mut strips = row![].spacing(6).width(Length::Fill).height(Length::Fill);
     for track in audio_tracks {
@@ -62,18 +72,19 @@ pub fn view<'a>(
             selected_track_id == Some(track.id),
             level.0,
             level.1,
+            lang,
         ));
     }
 
     strips = strips.push(vertical_rule(1).style(theme::divider));
-    strips = strips.push(master_strip(playback));
+    strips = strips.push(master_strip(master_gain_db, playback, lang));
 
     container(
         column![header, horizontal_rule(1).style(theme::divider), strips]
             .spacing(10)
             .height(Length::Fill),
     )
-    .width(250)
+    .width(276)
     .height(Length::Fill)
     .padding(12)
     .style(theme::sidebar)
@@ -85,7 +96,9 @@ fn track_strip<'a>(
     selected: bool,
     peak_db: f32,
     rms_db: f32,
+    lang: AppLanguage,
 ) -> Element<'a, MixerMessage> {
+    let s = i18n::strings(lang);
     let id = track.id;
     let short_name = concise_track_label(&track.name, track.kind);
     let label_btn = button(
@@ -108,7 +121,7 @@ fn track_strip<'a>(
             .padding([3, 5])
             .style(theme::mixer_toggle_button(track.audio.muted, theme::DANGER))
             .on_press(MixerMessage::ToggleMute(id)),
-        "Silenciar trilha (Mute)",
+        s.audio_mute_tip,
         Position::Top,
     );
     let solo_btn = icon_tooltip(
@@ -116,19 +129,25 @@ fn track_strip<'a>(
             .padding([3, 5])
             .style(theme::mixer_toggle_button(track.audio.solo, theme::WARNING))
             .on_press(MixerMessage::ToggleSolo(id)),
-        "Ouvir apenas esta trilha (Solo)",
+        s.audio_solo_tip,
         Position::Top,
     );
 
     let fader_value = track.audio.gain_db.clamp(MIXER_MIN_GAIN_DB, MAX_TRACK_GAIN_DB);
-    let fader = vertical_slider(MIXER_MIN_GAIN_DB..=MAX_TRACK_GAIN_DB, fader_value, move |val| {
+    let fader_slider = vertical_slider(MIXER_MIN_GAIN_DB..=MAX_TRACK_GAIN_DB, fader_value, move |val| {
         MixerMessage::TrackGainChanged { track_id: id, gain_db: val }
     })
     .step(0.5_f32)
     .on_release(MixerMessage::TrackGainReleased(id))
     .width(18)
     .height(Length::Fill)
-    .style(theme::preview_slider);
+    .style(theme::preview_slider)
+    .into();
+    let fader = icon_tooltip(
+        double_click_target(fader_slider, MixerMessage::TrackGainReset(id)),
+        s.audio_fader_reset_tip,
+        Position::Top,
+    );
 
     let meter = Canvas::new(DbMeterProgram { peak_db, rms_db })
         .width(10)
@@ -139,15 +158,26 @@ fn track_strip<'a>(
         .height(Length::Fill)
         .align_y(Vertical::Center);
 
+    let db_readout = icon_tooltip(
+        double_click_target(
+            text(format_db_readout(fader_value))
+                .size(9)
+                .font(theme::FONT_MEDIUM)
+                .color(theme::TEXT_SECONDARY)
+                .wrapping(text::Wrapping::None)
+                .into(),
+            MixerMessage::TrackGainReset(id),
+        ),
+        s.audio_fader_reset_tip,
+        Position::Top,
+    );
+
     container(
         column![
             label_btn,
             row![mute_btn, solo_btn].spacing(3).align_y(Vertical::Center),
             fader_area,
-            text(format_db_readout(fader_value))
-                .size(9)
-                .font(theme::FONT_MEDIUM)
-                .color(theme::TEXT_SECONDARY),
+            db_readout,
         ]
         .spacing(6)
         .align_x(Horizontal::Center)
@@ -160,12 +190,26 @@ fn track_strip<'a>(
     .into()
 }
 
-fn master_strip<'a>(playback: &'a PlaybackState) -> Element<'a, MixerMessage> {
-    let fader = vertical_slider(0.0_f32..=1.0_f32, playback.master_volume, MixerMessage::MasterVolumeChanged)
-        .step(0.02_f32)
-        .width(18)
-        .height(Length::Fill)
-        .style(theme::preview_slider);
+fn master_strip<'a>(
+    master_gain_db: f32,
+    playback: &'a PlaybackState,
+    lang: AppLanguage,
+) -> Element<'a, MixerMessage> {
+    let s = i18n::strings(lang);
+    let master_value = master_gain_db.clamp(MIXER_MIN_GAIN_DB, MAX_TRACK_GAIN_DB);
+    let fader_slider =
+        vertical_slider(MIXER_MIN_GAIN_DB..=MAX_TRACK_GAIN_DB, master_value, MixerMessage::MasterGainChanged)
+            .step(0.5_f32)
+            .on_release(MixerMessage::MasterGainReleased)
+            .width(18)
+            .height(Length::Fill)
+            .style(theme::preview_slider)
+            .into();
+    let fader = icon_tooltip(
+        double_click_target(fader_slider, MixerMessage::MasterGainReset),
+        s.audio_fader_reset_tip,
+        Position::Top,
+    );
 
     let meter = Canvas::new(DbMeterProgram {
         peak_db: playback.audio_meter.master_peak_db,
@@ -174,30 +218,55 @@ fn master_strip<'a>(playback: &'a PlaybackState) -> Element<'a, MixerMessage> {
     .width(12)
     .height(Length::Fill);
 
-    let readout = if playback.audio_meter.master_peak_db <= -59.5 {
-        format!("{:.0}%", playback.master_volume * 100.0)
-    } else {
+    let readout = if playback.audio_meter.master_peak_db > -59.5 {
         format!("{:.1}dB", playback.audio_meter.master_peak_db)
+    } else {
+        format_db_readout(master_value)
     };
+    let readout_target = icon_tooltip(
+        double_click_target(
+            text(readout)
+                .size(9)
+                .font(theme::FONT_MEDIUM)
+                .color(theme::TEXT_PRIMARY)
+                .wrapping(text::Wrapping::None)
+                .into(),
+            MixerMessage::MasterGainReset,
+        ),
+        s.audio_fader_reset_tip,
+        Position::Top,
+    );
 
     container(
         column![
-            container(text("MASTER").size(9).font(theme::FONT_BOLD).color(theme::TEXT_ON_ACCENT))
-                .width(Length::Fill)
-                .padding([4, 3])
-                .center_x(Length::Fill)
-                .style(theme::badge_accent),
-            container(text("OUT").size(9).font(theme::FONT_SEMIBOLD).color(theme::TEXT_SECONDARY))
-                .padding([3, 6])
-                .style(theme::badge),
+            container(
+                text("MASTER")
+                    .size(10)
+                    .font(theme::FONT_BOLD)
+                    .color(theme::TEXT_ON_ACCENT)
+                    .wrapping(text::Wrapping::None),
+            )
+            .width(Length::Fill)
+            .padding([4, 4])
+            .center_x(Length::Fill)
+            .style(theme::badge_accent),
+            container(
+                text("OUT")
+                    .size(9)
+                    .font(theme::FONT_SEMIBOLD)
+                    .color(theme::TEXT_SECONDARY)
+                    .wrapping(text::Wrapping::None),
+            )
+            .padding([3, 6])
+            .style(theme::badge),
             row![fader, meter].spacing(4).height(Length::Fill).align_y(Vertical::Center),
-            text(readout).size(9).font(theme::FONT_MEDIUM).color(theme::TEXT_PRIMARY),
+            readout_target,
         ]
         .spacing(6)
         .align_x(Horizontal::Center)
         .height(Length::Fill),
     )
-    .width(Length::Fill)
+    .width(70)
     .height(Length::Fill)
     .padding([6, 4])
     .style(theme::card)

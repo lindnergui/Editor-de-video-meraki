@@ -72,6 +72,11 @@ pub(crate) fn build_split_pair(
 
     let (left_vol_kf, right_vol_kf) =
         crate::timeline_audio::split_volume_keyframes(&original.volume_keyframes, left_duration);
+    let preserved_media_duration = if original.title.is_some() {
+        original.media_duration_ns
+    } else {
+        original.media_duration_ns.max(original.source_out_ns()?)
+    };
 
     let right_clip = Clip {
         id: right_id,
@@ -79,6 +84,7 @@ pub(crate) fn build_split_pair(
         timeline_start_ns: split_at_ns,
         source_in_ns: right_source_in,
         duration_ns: right_duration,
+        media_duration_ns: preserved_media_duration,
         transform: original.transform,
         title: original.title.clone(),
         effects: original.effects.clone(),
@@ -89,6 +95,7 @@ pub(crate) fn build_split_pair(
     };
     let left_clip = Clip {
         duration_ns: left_duration,
+        media_duration_ns: preserved_media_duration,
         transition_in: left_in,
         transition_out: None,
         keyframes: left_kf,

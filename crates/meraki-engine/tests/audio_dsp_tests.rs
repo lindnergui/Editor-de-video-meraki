@@ -84,6 +84,7 @@ fn engine_applies_live_dsp_eq_solo_mute_volume_keyframes_and_streams_db_levels()
         clip_id: ClipId::new(),
         track_id: track_a,
         path: wav_a.0.clone(),
+        proxy_path: None,
         track_kind: TrackKind::Audio,
         timeline_start_ns: 0,
         source_in_ns: 0,
@@ -104,6 +105,7 @@ fn engine_applies_live_dsp_eq_solo_mute_volume_keyframes_and_streams_db_levels()
         clip_id: ClipId::new(),
         track_id: track_b,
         path: wav_b.0.clone(),
+        proxy_path: None,
         volume_keyframes: Vec::new(),
         ..clip_a.clone()
     };
@@ -117,6 +119,7 @@ fn engine_applies_live_dsp_eq_solo_mute_volume_keyframes_and_streams_db_levels()
 
     handle
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips: vec![clip_a, clip_b],
             audio_mix: vec![
                 TrackAudioMix { track_id: track_a, settings: settings_a },

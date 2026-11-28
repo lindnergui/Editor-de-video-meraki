@@ -1,11 +1,13 @@
 use crate::app::Message;
 use crate::app_exit_guard::{ExitGuardMessage, PendingExitAction};
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::Vertical;
 use iced::widget::{
     button, column, container, horizontal_space, opaque, row, stack, text,
 };
 use iced::{Background, Border, Color, Element, Length};
+use meraki_core::AppLanguage;
 
 fn modal_shell_style(_theme: &iced::Theme) -> container::Style {
     container::Style {
@@ -50,14 +52,16 @@ pub fn overlay<'a>(
     base: Element<'a, Message>,
     project_name: &'a str,
     pending: Option<&PendingExitAction>,
+    lang: AppLanguage,
 ) -> Element<'a, Message> {
     if pending.is_none() {
         return base;
     }
+    let s = i18n::strings(lang);
 
     let header = row![
         icons::icon(icons::ALERT_CIRCLE, 18.0, theme::WARNING),
-        text("Salvar alterações antes de sair?")
+        text(s.unsaved_title)
             .size(16)
             .font(theme::FONT_BOLD)
             .color(theme::TEXT_PRIMARY),
@@ -65,39 +69,40 @@ pub fn overlay<'a>(
     .spacing(8)
     .align_y(Vertical::Center);
 
-    let description = text(format!(
-        "O projeto \"{project_name}\" possui alterações que ainda não foram salvas."
-    ))
-    .size(13)
-    .color(theme::TEXT_SECONDARY);
+    let description = text(i18n::format_unsaved_desc(lang, project_name))
+        .size(13)
+        .color(theme::TEXT_SECONDARY);
 
     let cancel_btn = button(
-        text("Cancelar")
+        text(s.unsaved_cancel)
             .size(12)
             .font(theme::FONT_MEDIUM)
-            .color(theme::TEXT_PRIMARY),
+            .color(theme::TEXT_PRIMARY)
+            .wrapping(text::Wrapping::None),
     )
-    .padding([8, 14])
+    .padding([8, 12])
     .style(theme::secondary_button)
     .on_press(Message::ExitGuard(ExitGuardMessage::Cancel));
 
     let discard_btn = button(
-        text("Sair sem Salvar")
+        text(s.unsaved_discard)
             .size(12)
             .font(theme::FONT_MEDIUM)
-            .color(theme::DANGER),
+            .color(theme::DANGER)
+            .wrapping(text::Wrapping::None),
     )
-    .padding([8, 14])
+    .padding([8, 12])
     .style(danger_subtle_button)
     .on_press(Message::ExitGuard(ExitGuardMessage::DiscardAndContinue));
 
     let save_btn = button(
-        text("Salvar e Sair")
+        text(s.unsaved_save)
             .size(12)
             .font(theme::FONT_SEMIBOLD)
-            .color(theme::TEXT_ON_ACCENT),
+            .color(theme::TEXT_ON_ACCENT)
+            .wrapping(text::Wrapping::None),
     )
-    .padding([8, 16])
+    .padding([8, 12])
     .style(theme::primary_button)
     .on_press(Message::ExitGuard(ExitGuardMessage::SaveAndContinue));
 

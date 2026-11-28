@@ -1,12 +1,13 @@
 use crate::app_delivery::DeliveryMessage;
 use crate::components::effects_library::matches_query;
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::Vertical;
 use iced::widget::{
     button, column, container, horizontal_space, row, scrollable, text, text_input, Column, Row,
 };
 use iced::{Element, Length};
-use meraki_core::ExportPreset;
+use meraki_core::{AppLanguage, ExportPreset};
 
 /// Metadados visuais de cada cartão de predefinição na aba Entrega.
 #[derive(Debug, Clone, Copy)]
@@ -65,9 +66,11 @@ pub const PRESET_CARDS: [PresetCardInfo; 6] = [
 ];
 
 fn matches_preset(info: &PresetCardInfo, query: &str) -> bool {
+    let (en_title, en_sub, en_tag) = i18n::export_preset_card(AppLanguage::EnUs, info.preset);
     matches_query(query, info.title, info.subtitle)
         || matches_query(query, info.tag, info.preset.label())
-        || matches_query(query, info.preset.description(), "")
+        || matches_query(query, info.preset.description(), en_title)
+        || matches_query(query, en_sub, en_tag)
 }
 
 /// Filtra predefinições por título, subtítulo, tag ou descrição do domínio.
@@ -83,15 +86,18 @@ pub fn filtered_presets(query: &str) -> Vec<ExportPreset> {
 pub fn view<'a>(
     search_query: &'a str,
     active_preset: ExportPreset,
+    lang: AppLanguage,
 ) -> Element<'a, DeliveryMessage> {
-    let header = text("PREDEFINIÇÕES DE EXPORTAÇÃO")
+    let s = i18n::strings(lang);
+    let header = text(s.delivery_presets_header)
         .size(11)
         .font(theme::FONT_BOLD)
-        .color(theme::TEXT_SECONDARY);
+        .color(theme::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None);
 
     let search = row![
         icons::icon(icons::SEARCH, 13.0, theme::TEXT_SECONDARY),
-        text_input("Buscar predefinições...", search_query)
+        text_input(s.delivery_search_placeholder, search_query)
             .on_input(DeliveryMessage::PresetSearchChanged)
             .size(12)
             .padding([6, 8])
@@ -106,21 +112,17 @@ pub fn view<'a>(
         .collect();
 
     let grid_content: Element<'a, DeliveryMessage> = if visible.is_empty() {
-        container(
-            text("Nenhuma predefinição encontrada.")
-                .size(12)
-                .color(theme::TEXT_SECONDARY),
-        )
-        .width(Length::Fill)
-        .padding(16)
-        .style(theme::card)
-        .into()
+        container(text(s.delivery_no_presets).size(12).color(theme::TEXT_SECONDARY))
+            .width(Length::Fill)
+            .padding(16)
+            .style(theme::card)
+            .into()
     } else {
         let mut grid = Column::new().spacing(10).width(Length::Fill);
         for pair in visible.chunks(2) {
             let mut r = Row::new().spacing(10).width(Length::Fill);
             for info in pair {
-                r = r.push(preset_card(info, info.preset == active_preset));
+                r = r.push(preset_card(info, info.preset == active_preset, lang));
             }
             if pair.len() == 1 {
                 r = r.push(horizontal_space().width(Length::Fill));
@@ -148,7 +150,12 @@ pub fn view<'a>(
     .into()
 }
 
-fn preset_card<'a>(info: &PresetCardInfo, selected: bool) -> Element<'a, DeliveryMessage> {
+fn preset_card<'a>(
+    info: &PresetCardInfo,
+    selected: bool,
+    lang: AppLanguage,
+) -> Element<'a, DeliveryMessage> {
+    let (title, subtitle, tag) = i18n::export_preset_card(lang, info.preset);
     let icon_color = if selected { theme::ACCENT_HOVER } else { theme::TEXT_SECONDARY };
     let tag_style: fn(&iced::Theme) -> iced::widget::container::Style =
         if selected { theme::badge_accent } else { theme::badge };
@@ -162,7 +169,7 @@ fn preset_card<'a>(info: &PresetCardInfo, selected: bool) -> Element<'a, Deliver
             .center_y(34)
             .style(theme::badge),
         horizontal_space(),
-        container(text(info.tag).size(10).font(theme::FONT_SEMIBOLD).color(tag_text_color))
+        container(text(tag).size(10).font(theme::FONT_SEMIBOLD).color(tag_text_color).wrapping(text::Wrapping::None))
             .padding([3, 7])
             .style(tag_style),
     ]
@@ -170,13 +177,8 @@ fn preset_card<'a>(info: &PresetCardInfo, selected: bool) -> Element<'a, Deliver
 
     let content = column![
         top_row,
-        text(info.title)
-            .size(13)
-            .font(theme::FONT_SEMIBOLD)
-            .color(theme::TEXT_PRIMARY),
-        text(info.subtitle)
-            .size(11)
-            .color(theme::TEXT_SECONDARY),
+        text(title).size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+        text(subtitle).size(11).color(theme::TEXT_SECONDARY),
     ]
     .spacing(6)
     .width(Length::Fill);

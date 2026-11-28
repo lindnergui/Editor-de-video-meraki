@@ -70,6 +70,7 @@ fn clip(path: &Path, kind: TrackKind) -> TimelineRenderClip {
         clip_id: ClipId::new(),
         track_id: TrackId::new(),
         path: path.to_path_buf(),
+        proxy_path: None,
         track_kind: kind,
         timeline_start_ns: 0,
         source_in_ns: 0,
@@ -118,6 +119,7 @@ fn start(clips: Vec<TimelineRenderClip>) -> EngineHandle {
     });
     engine
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips,
             audio_mix: Vec::new(),
             preview_quality: PreviewQuality::Proxy720p,

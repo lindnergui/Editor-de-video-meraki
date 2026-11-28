@@ -7,3 +7,4 @@ mod files_model;
 pub mod keymap_welcome;
 pub mod project_hub;
 mod project_hub_cards;
+pub mod transition_inspector;

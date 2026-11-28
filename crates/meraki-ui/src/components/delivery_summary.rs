@@ -1,4 +1,5 @@
 use crate::app_delivery::{format_file_size, format_hms, CoverSlot, DeliveryMessage, DeliveryState};
+use crate::i18n;
 use crate::playback::PlaybackState;
 use crate::{icons, theme};
 use iced::alignment::Vertical;
@@ -6,7 +7,7 @@ use iced::widget::{
     button, column, container, horizontal_space, image, progress_bar, row, text, Stack,
 };
 use iced::{Background, Border, Color, ContentFit, Element, Length, Theme};
-use meraki_core::Project;
+use meraki_core::{AppLanguage, Project};
 
 /// Converte o tamanho estimado em bytes para proporção visual (0.0..=1.0) em escala logarítmica.
 pub fn estimated_size_bar_ratio(bytes: u64) -> f32 {
@@ -22,40 +23,39 @@ pub fn view<'a>(
     project: &'a Project,
     playback: &'a PlaybackState,
     state: &'a DeliveryState,
+    lang: AppLanguage,
 ) -> Element<'a, DeliveryMessage> {
-    let header = text("VISUALIZAÇÃO DO VÍDEO & INFO")
+    let s = i18n::strings(lang);
+    let header = text(s.delivery_preview_header)
         .size(11)
         .font(theme::FONT_BOLD)
-        .color(theme::TEXT_SECONDARY);
+        .color(theme::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None);
 
     let duration_ns = project.timeline.total_duration_ns();
     let duration_label = format_hms(duration_ns);
-    let viewport = build_preview_box(playback, duration_label.clone(), duration_ns == 0);
+    let viewport = build_preview_box(playback, duration_label.clone(), duration_ns == 0, lang);
 
     let settings = &state.settings;
     let estimated_bytes = settings.estimate_file_size_bytes(duration_ns);
     let resolution_label = if settings.format.is_audio_only() {
-        "Somente Áudio"
+        s.delivery_audio_only
     } else {
-        settings.resolution.label()
+        i18n::export_resolution_label(lang, settings.resolution)
     };
-    let fps_label = if settings.format.is_audio_only() {
-        "—"
-    } else {
-        settings.fps.label()
-    };
+    let fps_label = if settings.format.is_audio_only() { "—" } else { settings.fps.label() };
 
     let info_card = container(
         column![
             row![
-                metric_item("Duração", duration_label),
-                metric_item("Resolução", resolution_label.to_string()),
+                metric_item(s.delivery_duration, duration_label),
+                metric_item(s.delivery_resolution, resolution_label.to_string()),
             ]
             .spacing(12)
             .width(Length::Fill),
             row![
-                metric_item("Taxa de Quadros", fps_label.to_string()),
-                metric_item("Tamanho Estimado", format_file_size(estimated_bytes)),
+                metric_item(s.delivery_fps, fps_label.to_string()),
+                metric_item(s.delivery_estimated_size, format_file_size(estimated_bytes)),
             ]
             .spacing(12)
             .width(Length::Fill),
@@ -64,9 +64,9 @@ pub fn view<'a>(
                     .height(6.0)
                     .style(size_bar_style),
                 row![
-                    text(settings.format.label()).size(10).color(theme::TEXT_SECONDARY),
+                    text(i18n::export_format_label(lang, settings.format)).size(10).color(theme::TEXT_SECONDARY),
                     horizontal_space(),
-                    text(format!("Qualidade: {}", settings.quality.label()))
+                    text(format!("{}: {}", s.delivery_quality, i18n::export_quality_label(lang, settings.quality)))
                         .size(10)
                         .color(theme::TEXT_SECONDARY),
                 ],
@@ -80,7 +80,7 @@ pub fn view<'a>(
     .style(theme::card);
 
     let cover_header = row![
-        text("Escolher Capa (Thumbnail)")
+        text(s.delivery_choose_cover)
             .size(12)
             .font(theme::FONT_SEMIBOLD)
             .color(theme::TEXT_PRIMARY),
@@ -88,7 +88,7 @@ pub fn view<'a>(
         text(
             settings
                 .cover_timestamp_ns
-                .map_or_else(|| "Nenhuma definida".to_string(), format_hms)
+                .map_or_else(|| s.delivery_cover_none.to_string(), format_hms)
         )
         .size(11)
         .color(theme::TEXT_SECONDARY),
@@ -98,7 +98,7 @@ pub fn view<'a>(
     let mut cover_row = row![].spacing(8).width(Length::Fill);
     for slot in CoverSlot::ALL {
         let selected = state.selected_cover_slot == Some(slot);
-        cover_row = cover_row.push(cover_slot_card(slot, duration_ns, selected));
+        cover_row = cover_row.push(cover_slot_card(slot, duration_ns, selected, lang));
     }
 
     container(
@@ -118,7 +118,9 @@ fn build_preview_box<'a>(
     playback: &'a PlaybackState,
     duration_label: String,
     is_empty: bool,
+    lang: AppLanguage,
 ) -> Element<'a, DeliveryMessage> {
+    let s = i18n::strings(lang);
     let media: Element<'a, DeliveryMessage> = if let Some(frame) = &playback.current_frame {
         container(
             image(frame.clone())
@@ -132,11 +134,7 @@ fn build_preview_box<'a>(
         .center_y(Length::Fill)
         .into()
     } else {
-        let placeholder = if is_empty {
-            "Timeline sem clipes para pré-visualização"
-        } else {
-            "Clique em uma capa para pré-visualizar o quadro"
-        };
+        let placeholder = if is_empty { s.delivery_empty_preview } else { s.delivery_pick_cover_hint };
         container(
             column![
                 icons::icon(icons::MEDIA_VIDEO, 32.0, theme::TEXT_SECONDARY),
@@ -153,14 +151,9 @@ fn build_preview_box<'a>(
     };
 
     let duration_badge = container(
-        container(
-            text(duration_label)
-                .size(11)
-                .font(theme::FONT_SEMIBOLD)
-                .color(theme::TEXT_PRIMARY),
-        )
-        .padding([4, 8])
-        .style(theme::badge),
+        container(text(duration_label).size(11).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY))
+            .padding([4, 8])
+            .style(theme::badge),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -185,10 +178,7 @@ fn build_preview_box<'a>(
 fn metric_item<'a>(label: &'a str, value: String) -> Element<'a, DeliveryMessage> {
     column![
         text(label).size(10).color(theme::TEXT_SECONDARY),
-        text(value)
-            .size(13)
-            .font(theme::FONT_SEMIBOLD)
-            .color(theme::TEXT_PRIMARY),
+        text(value).size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
     ]
     .spacing(2)
     .width(Length::Fill)
@@ -199,6 +189,7 @@ fn cover_slot_card<'a>(
     slot: CoverSlot,
     duration_ns: u64,
     selected: bool,
+    lang: AppLanguage,
 ) -> Element<'a, DeliveryMessage> {
     let ts_label = format_hms(slot.timestamp_ns(duration_ns));
     let icon_color = if selected { theme::ACCENT_HOVER } else { theme::TEXT_SECONDARY };
@@ -210,10 +201,11 @@ fn cover_slot_card<'a>(
             .center_y(26)
             .style(theme::preview_viewport),
         row![
-            text(slot.label())
+            text(i18n::cover_slot_label(lang, slot))
                 .size(11)
                 .font(theme::FONT_SEMIBOLD)
-                .color(theme::TEXT_PRIMARY),
+                .color(theme::TEXT_PRIMARY)
+                .wrapping(text::Wrapping::None),
             horizontal_space(),
             text(ts_label).size(10).color(theme::TEXT_SECONDARY),
         ]

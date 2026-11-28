@@ -1,10 +1,11 @@
 use crate::discoverer::{self, DiscovererError};
 use crate::protocol::TimelineRenderClip;
+use crate::proxy_cache;
 use gstreamer_editing_services as ges;
 use gstreamer_editing_services::prelude::*;
 use meraki_core::{ClipId, TimelineError, TrackKind};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -54,14 +55,32 @@ pub(crate) enum PreparedSource {
 pub(crate) struct PreparedClip {
     pub render: TimelineRenderClip,
     pub source: PreparedSource,
+    pub selected_proxy: Option<PathBuf>,
+}
+
+impl PreparedClip {
+    pub(crate) fn has_video(&self) -> bool {
+        match &self.source {
+            PreparedSource::Media { track_types, .. } => track_types.contains(ges::TrackType::VIDEO),
+            PreparedSource::Title => true,
+        }
+    }
 }
 
 /// Valida e prepara clipes da timeline reutilizando `UriClipAsset` em cache entre sincronizações.
 pub(crate) async fn prepare_clips(
     asset_cache: &mut HashMap<String, ges::UriClipAsset>,
-    mut clips: Vec<TimelineRenderClip>,
+    clips: Vec<TimelineRenderClip>,
 ) -> Result<Vec<PreparedClip>, PipelineError> {
-    clips.sort_by_key(|c| (track_kind_rank(c.track_kind), c.timeline_start_ns));
+    prepare_preview_clips(asset_cache, clips, false).await
+}
+
+pub(crate) async fn prepare_preview_clips(
+    asset_cache: &mut HashMap<String, ges::UriClipAsset>,
+    mut clips: Vec<TimelineRenderClip>,
+    use_proxies: bool,
+) -> Result<Vec<PreparedClip>, PipelineError> {
+    clips.sort_by_key(|c| track_kind_rank(c.track_kind));
     let mut prepared = Vec::with_capacity(clips.len());
 
     for clip in clips {
@@ -96,23 +115,13 @@ pub(crate) async fn prepare_clips(
                 title
                     .validate()
                     .map_err(|source| PipelineError::InvalidTransform { clip_id: clip.clip_id, source })?;
-                prepared.push(PreparedClip { render: clip, source: PreparedSource::Title });
+                prepared.push(PreparedClip { render: clip, source: PreparedSource::Title, selected_proxy: None });
                 continue;
             }
         }
 
-        let uri = discoverer::path_to_file_uri(&clip.path)?;
-        let asset = if let Some(cached) = asset_cache.get(&uri) {
-            cached.clone()
-        } else {
-            let loaded = ges::UriClipAsset::new_future(&uri)
-                .await
-                .map_err(|err| PipelineError::LoadUriAsset { path: clip.path.clone(), reason: err.to_string() })?;
-            asset_cache.insert(uri, loaded.clone());
-            loaded
-        };
-
-        let info = asset.info();
+        let original = load_asset(asset_cache, &clip.path).await?;
+        let info = original.info();
         let track_types = resolve_track_types(
             clip.track_kind,
             !info.video_streams().is_empty(),
@@ -127,13 +136,57 @@ pub(crate) async fn prepare_clips(
             (w > 0 && h > 0).then_some((w, h))
         });
 
+        let (asset, selected_proxy) = if use_proxies && !is_image && !info.video_streams().is_empty() {
+            select_proxy(asset_cache, &clip, original, track_types).await
+        } else {
+            (original, None)
+        };
         prepared.push(PreparedClip {
             render: clip,
             source: PreparedSource::Media { asset, track_types, is_image, natural_size },
+            selected_proxy,
         });
     }
 
     Ok(prepared)
+}
+
+async fn load_asset(
+    cache: &mut HashMap<String, ges::UriClipAsset>,
+    path: &Path,
+) -> Result<ges::UriClipAsset, PipelineError> {
+    let uri = discoverer::path_to_file_uri(path)?;
+    if let Some(asset) = cache.get(&uri) {
+        return Ok(asset.clone());
+    }
+    let asset = ges::UriClipAsset::new_future(&uri).await
+        .map_err(|err| PipelineError::LoadUriAsset { path: path.to_path_buf(), reason: err.to_string() })?;
+    cache.insert(uri, asset.clone());
+    Ok(asset)
+}
+
+async fn select_proxy(
+    cache: &mut HashMap<String, ges::UriClipAsset>,
+    clip: &TimelineRenderClip,
+    original: ges::UriClipAsset,
+    tracks: ges::TrackType,
+) -> (ges::UriClipAsset, Option<PathBuf>) {
+    let generated = proxy_cache::fingerprint(&clip.path).ok().and_then(|name| proxy_cache::locate(&name));
+    let supplied = clip.proxy_path.as_ref().filter(|path| {
+        !proxy_cache::in_cache(path) && proxy_cache::valid_proxy(path)
+    });
+    let Some(path) = generated.or_else(|| supplied.cloned()) else { return (original, None) };
+    let Ok(proxy) = load_asset(cache, &path).await else { return (original, None) };
+    let info = proxy.info();
+    let end = clip.source_in_ns.saturating_add(clip.duration_ns);
+    if info.duration().is_some_and(|duration| duration.nseconds() >= end)
+        && !info.video_streams().is_empty()
+        && (!tracks.contains(ges::TrackType::AUDIO) || !info.audio_streams().is_empty())
+    {
+        (proxy, Some(path))
+    } else {
+        (original, None)
+    }
 }
 
 fn track_kind_rank(kind: TrackKind) -> u8 {
@@ -180,6 +233,7 @@ mod tests {
                 clip_id: ClipId::new(),
                 track_id: meraki_core::TrackId::new(),
                 path: png.0.clone(),
+                proxy_path: None,
                 track_kind: TrackKind::Video,
                 timeline_start_ns: 0,
                 source_in_ns: 0,

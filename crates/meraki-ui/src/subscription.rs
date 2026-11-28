@@ -212,6 +212,7 @@ fn is_critical_event(event: &EngineEvent) -> bool {
         event,
         EngineEvent::FrameReady(_)
             | EngineEvent::AudioLevels(_)
+            | EngineEvent::AudioSpectrum(_)
             | EngineEvent::PlayheadTick(_)
             | EngineEvent::ExportProgress { .. }
     )

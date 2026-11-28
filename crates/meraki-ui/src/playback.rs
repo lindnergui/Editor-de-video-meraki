@@ -5,6 +5,7 @@ use meraki_core::{AssetId, Clip, ClipId, MediaKind, PreviewQuality, Project, Tra
 use meraki_engine::{AudioMeterFrame, EngineCommand, EngineEvent, EngineHandle, TimelineRenderClip, TrackAudioMix};
 use tracing::{debug, error, info, warn};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Duração padrão aplicada caso o ativo ainda não tenha metadados descobertos.
 pub const DEFAULT_ASSET_CLIP_DURATION_NS: u64 = 5_000_000_000;
@@ -21,7 +22,9 @@ pub struct PlaybackState {
     pub master_volume: f32,
     pub preview_quality: PreviewQuality,
     pub selected_clip_id: Option<ClipId>,
+    pub selected_transition_id: Option<Uuid>,
     pub audio_meter: AudioMeterFrame,
+    pub audio_spectrum: Option<meraki_engine::SpectrumBands>,
 }
 
 impl Default for PlaybackState {
@@ -42,11 +45,9 @@ impl PlaybackState {
             master_volume: 1.0,
             preview_quality,
             selected_clip_id: None,
-            audio_meter: AudioMeterFrame {
-                master_peak_db: -60.0,
-                master_rms_db: -60.0,
-                tracks: Vec::new(),
-            },
+            selected_transition_id: None,
+            audio_meter: AudioMeterFrame { master_peak_db: -60.0, master_rms_db: -60.0, tracks: Vec::new() },
+            audio_spectrum: None,
         }
     }
 }
@@ -69,31 +70,23 @@ pub enum PlaybackMessage {
 }
 
 /// Converte a timeline atual do `Project` na lista de clipes leves para sincronização GES.
-pub fn build_render_clips(project: &Project, quality: PreviewQuality) -> Vec<TimelineRenderClip> {
+pub fn build_render_clips(project: &Project) -> Vec<TimelineRenderClip> {
     let mut render_clips = Vec::new();
     for track in &project.timeline.tracks {
         for clip in &track.clips {
-            let path = if clip.title.is_some() {
-                std::path::PathBuf::new()
+            let (path, proxy_path) = if clip.title.is_some() {
+                (std::path::PathBuf::new(), None)
             } else {
                 let Some(asset) = project.asset(clip.asset_id) else {
                     continue;
                 };
-                if quality == PreviewQuality::Proxy720p {
-                    asset
-                        .proxy_path
-                        .as_ref()
-                        .filter(|proxy| proxy.is_file())
-                        .cloned()
-                        .unwrap_or_else(|| asset.path.clone())
-                } else {
-                    asset.path.clone()
-                }
+                (asset.path.clone(), asset.proxy_path.clone())
             };
             render_clips.push(TimelineRenderClip {
                 clip_id: clip.id,
                 track_id: track.id,
                 path,
+                proxy_path,
                 track_kind: track.kind,
                 timeline_start_ns: clip.timeline_start_ns,
                 source_in_ns: clip.source_in_ns,
@@ -271,6 +264,7 @@ pub fn apply_transport_or_selection(
             engine.send(EngineCommand::Shuttle { direction }).map_err(|err| err.to_string())
         }
         PlaybackMessage::Seek(pos_ns) => {
+            playback.audio_spectrum = None;
             playback.playhead_ns = pos_ns;
             project.timeline.playhead_ns = pos_ns;
             engine.request_seek(pos_ns);
@@ -288,7 +282,11 @@ pub fn apply_transport_or_selection(
             if volume.is_finite() {
                 let clamped = volume.clamp(0.0, 1.0);
                 playback.master_volume = clamped;
-                engine.send(EngineCommand::SetMasterVolume(clamped)).map_err(|err| err.to_string())
+                let gain_db = 20.0 * f64::from(clamped).max(0.001).log10();
+                engine.send(EngineCommand::UpdateAudioLive {
+                    track_volumes: None, master_volume_db: Some(gain_db), master_muted: None,
+                    track_eq: None, track_enhancements: None,
+                }).map_err(|err| err.to_string())
             } else {
                 Ok(())
             }
@@ -296,20 +294,11 @@ pub fn apply_transport_or_selection(
         PlaybackMessage::SetPreviewQuality(quality) => {
             playback.preview_quality = quality;
             project.preview_quality = quality;
-            let uses_proxy = project.assets.iter().any(|a| a.proxy_path.as_ref().is_some_and(|p| p.is_file()));
-            let cmd = if uses_proxy {
-                EngineCommand::SyncTimeline {
-                    clips: build_render_clips(project, quality),
-                    audio_mix: build_audio_mix(project),
-                    preview_quality: quality,
-                }
-            } else {
-                EngineCommand::SetPreviewQuality(quality)
-            };
-            engine.send(cmd).map_err(|err| err.to_string())
+            engine.send(EngineCommand::SetPreviewQuality(quality)).map_err(|err| err.to_string())
         }
         PlaybackMessage::SelectClip(clip_id) => {
             playback.selected_clip_id = clip_id;
+            playback.selected_transition_id = None;
             Ok(())
         }
         PlaybackMessage::DeleteSelectedClip | PlaybackMessage::Undo | PlaybackMessage::Redo => Ok(()),
@@ -351,6 +340,18 @@ pub fn apply_engine_event(
             }
             debug!(%asset_id, progress, "progresso de proxy atualizado");
         }
+        EngineEvent::ProxyGenerating { .. } => {}
+        EngineEvent::ProxyReady { asset_id, proxy_path } => {
+            if let Some(asset) = project.asset_mut(asset_id) {
+                asset.proxy_path = Some(proxy_path);
+            }
+        }
+        EngineEvent::ProxyFailed { reason, .. } => *last_error = Some(reason),
+        EngineEvent::ProxyCacheCleared { .. } => {
+            for asset in &mut project.assets {
+                asset.proxy_path = None;
+            }
+        }
         EngineEvent::FrameReady(frame) => {
             playback.current_frame = Some(image::Handle::from_rgba(
                 frame.width,
@@ -386,6 +387,7 @@ pub fn apply_engine_event(
         EngineEvent::AudioLevels(frame) => {
             playback.audio_meter = frame;
         }
+        EngineEvent::AudioSpectrum(bands) => playback.audio_spectrum = Some(bands),
         EngineEvent::ExportProgress { .. }
         | EngineEvent::ExportFinished { .. }
         | EngineEvent::ExportFailed { .. }

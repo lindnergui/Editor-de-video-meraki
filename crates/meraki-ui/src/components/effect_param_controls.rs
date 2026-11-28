@@ -1,12 +1,13 @@
 use crate::components::effects_inspector::EffectsInspectorMessage;
 use crate::components::effects_params_panel;
 use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::Vertical;
 use iced::widget::tooltip::Position;
 use iced::widget::{button, column, container, horizontal_space, row, text};
 use iced::{Background, Border, Element, Length};
-use meraki_core::{Clip, ClipEffect, ClipId, EffectParameters};
+use meraki_core::{AppLanguage, Clip, ClipEffect, ClipId, EffectParameters};
 use uuid::Uuid;
 
 /// Resolve qual efeito deve aparecer no inspetor individual (o selecionado ou o primeiro do take).
@@ -21,11 +22,13 @@ pub fn view<'a>(
     clip: &'a Clip,
     selected_effect_id: Option<Uuid>,
     draft: Option<(ClipId, Uuid, EffectParameters)>,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsInspectorMessage> {
+    let s = i18n::strings(lang);
     let selected = resolve_selected_effect(clip, selected_effect_id);
     let selected_id = selected.map(|effect| effect.id);
 
-    let mut applied_list = column![text("Efeitos Aplicados no Take")
+    let mut applied_list = column![text(s.inspector_applied_effects)
         .size(12)
         .font(theme::FONT_SEMIBOLD)
         .color(theme::TEXT_PRIMARY)]
@@ -34,7 +37,7 @@ pub fn view<'a>(
 
     if clip.effects.is_empty() {
         applied_list = applied_list.push(
-            text("Nenhum efeito aplicado. Clique em um efeito à esquerda.")
+            text(s.inspector_no_effects)
                 .size(11)
                 .color(theme::TEXT_SECONDARY),
         );
@@ -44,6 +47,7 @@ pub fn view<'a>(
                 clip.id,
                 effect,
                 selected_id == Some(effect.id),
+                lang,
             ));
         }
     }
@@ -58,7 +62,7 @@ pub fn view<'a>(
         let params = draft
             .filter(|(cid, eid, _)| *cid == clip.id && *eid == effect.id)
             .map_or(effect.params, |(_, _, p)| p);
-        root = root.push(effects_params_panel::view(clip.id, effect, params));
+        root = root.push(effects_params_panel::view(clip.id, effect, params, lang));
     }
     root.into()
 }
@@ -67,12 +71,14 @@ fn applied_effect_row<'a>(
     clip_id: ClipId,
     effect: &'a ClipEffect,
     is_selected: bool,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsInspectorMessage> {
+    let s = i18n::strings(lang);
     let effect_id = effect.id;
     let (eye_icon, eye_tint, eye_tip) = if effect.enabled {
-        (icons::EYE, theme::ACCENT, "Desativar efeito")
+        (icons::EYE, theme::ACCENT, s.inspector_disable_effect)
     } else {
-        (icons::EYE_OFF, theme::TEXT_SECONDARY, "Ativar efeito")
+        (icons::EYE_OFF, theme::TEXT_SECONDARY, s.inspector_enable_effect)
     };
     let toggle_btn = icon_tooltip(
         button(icons::icon(eye_icon, 13.0, eye_tint))
@@ -86,7 +92,10 @@ fn applied_effect_row<'a>(
     let name_color = if effect.enabled { theme::TEXT_PRIMARY } else { theme::TEXT_SECONDARY };
     let select_btn = button(
         row![
-            text(effect.name.as_str()).size(11).font(theme::FONT_MEDIUM).color(name_color),
+            text(i18n::clip_effect_label(lang, effect))
+                .size(11)
+                .font(theme::FONT_MEDIUM)
+                .color(name_color),
             horizontal_space(),
         ]
         .align_y(Vertical::Center),
@@ -101,7 +110,7 @@ fn applied_effect_row<'a>(
             .padding([3, 5])
             .style(theme::ghost_button)
             .on_press(EffectsInspectorMessage::RemoveEffectById(clip_id, effect_id)),
-        "Remover efeito",
+        s.inspector_remove_effect,
         Position::Top,
     );
 

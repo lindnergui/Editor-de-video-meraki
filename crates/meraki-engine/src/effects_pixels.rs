@@ -16,6 +16,7 @@ glib::wrapper! {
 
 mod imp {
     use super::*;
+    use gst::prelude::GstParamSpecBuilderExt;
     use gst_video::prelude::*;
     use gst_video::subclass::prelude::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,6 +27,7 @@ mod imp {
         vignette: AtomicU64,
         shift: AtomicU64,
         frequency: AtomicU64,
+        zoom: AtomicU64,
     }
 
     #[glib::object_subclass]
@@ -41,6 +43,7 @@ mod imp {
                 "vignette" => Some(&self.vignette),
                 "rgb-shift" => Some(&self.shift),
                 "shift-frequency" => Some(&self.frequency),
+                "zoom" => Some(&self.zoom),
                 _ => None,
             }
         }
@@ -48,12 +51,13 @@ mod imp {
 
     impl ObjectImpl for PixelEffects {
         fn properties() -> &'static [glib::ParamSpec] {
-            static PROPERTIES: OnceLock<[glib::ParamSpec; 3]> = OnceLock::new();
+            static PROPERTIES: OnceLock<[glib::ParamSpec; 4]> = OnceLock::new();
             PROPERTIES.get_or_init(|| {
-                ["vignette", "rgb-shift", "shift-frequency"].map(|name| {
+                ["vignette", "rgb-shift", "shift-frequency", "zoom"].map(|name| {
                     glib::ParamSpecDouble::builder(name)
                         .minimum(0.0)
                         .maximum(1.0)
+                        .controllable()
                         .build()
                 })
             })
@@ -79,7 +83,7 @@ mod imp {
                 gst::subclass::ElementMetadata::new(
                     "Meraki pixel effects",
                     "Filter/Effect/Video",
-                    "Vignette and RGB separation",
+                    "Vignette, RGB separation and centered zoom",
                     "Meraki Contributors",
                 )
             }))
@@ -109,6 +113,17 @@ mod imp {
             gst_base::subclass::BaseTransformMode::AlwaysInPlace;
         const PASSTHROUGH_ON_SAME_CAPS: bool = false;
         const TRANSFORM_IP_ON_PASSTHROUGH: bool = false;
+
+        fn before_transform(&self, buffer: &gst::BufferRef) {
+            let element = self.obj();
+            let segment = element.segment();
+            if let Some(time) = segment
+                .downcast_ref::<gst::ClockTime>()
+                .and_then(|segment| segment.to_stream_time(buffer.pts()))
+            {
+                let _ = element.sync_values(time);
+            }
+        }
     }
 
     impl VideoFilterImpl for PixelEffects {
@@ -118,7 +133,8 @@ mod imp {
         ) -> Result<gst::FlowSuccess, gst::FlowError> {
             let vignette = read(&self.vignette) as f32;
             let shift = read(&self.shift);
-            if vignette == 0.0 && shift == 0.0 {
+            let zoom = read(&self.zoom);
+            if vignette == 0.0 && shift == 0.0 && zoom == 0.0 {
                 return Ok(gst::FlowSuccess::Ok);
             }
 
@@ -142,6 +158,9 @@ mod imp {
             let phase = (time * (0.5 + 11.5 * read(&self.frequency)) * std::f64::consts::TAU).cos();
             let offset = (width as f64 * 0.03 * shift * phase).round() as isize;
             let plane = frame.plane_data_mut(0).map_err(|_| gst::FlowError::Error)?;
+            if zoom > 0.0 {
+                zoom_center(plane, width, height, stride, 1.0 + 0.25 * zoom)?;
+            }
             for (y, row) in plane.chunks_mut(stride).take(height).enumerate() {
                 let Some(row) = row.get_mut(..row_bytes) else {
                     return Err(gst::FlowError::Error);
@@ -159,6 +178,45 @@ mod imp {
 
     fn read(param: &AtomicU64) -> f64 {
         f64::from_bits(param.load(Ordering::Relaxed))
+    }
+
+    fn zoom_center(
+        plane: &mut [u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+        factor: f64,
+    ) -> Result<(), gst::FlowError> {
+        let needed = (height - 1)
+            .checked_mul(stride)
+            .and_then(|rows| rows.checked_add(width * 4))
+            .ok_or(gst::FlowError::Error)?;
+        if plane.len() < needed {
+            return Err(gst::FlowError::Error);
+        }
+        let edge_first = |step: usize, limit: usize| {
+            if step.is_multiple_of(2) {
+                step / 2
+            } else {
+                limit - 1 - step / 2
+            }
+        };
+        let source = |target: usize, limit: usize| {
+            let center = (limit - 1) as f64 * 0.5;
+            (center + (target as f64 - center) / factor).round() as usize
+        };
+        // Cada leitura aponta para um pixel mais perto do centro, que ainda não foi escrito.
+        for row in 0..height {
+            let y = edge_first(row, height);
+            let from_row = source(y, height) * stride;
+            for column in 0..width {
+                let x = edge_first(column, width);
+                let from = from_row + source(x, width) * 4;
+                let to = y * stride + x * 4;
+                plane.copy_within(from..from + 4, to);
+            }
+        }
+        Ok(())
     }
 
     // Percorre cada canal na direção que mantém seus pixels de origem intactos.

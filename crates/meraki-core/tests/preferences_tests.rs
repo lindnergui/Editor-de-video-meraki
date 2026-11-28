@@ -96,6 +96,7 @@ fn rename_remove_and_json_roundtrip_preserve_state_and_legacy_defaults() {
         keymap: KeymapProfile::DaVinciResolve,
         onboarding_completed: true,
         recent_projects: Vec::new(),
+        ..AppPreferences::default()
     };
     let path_a = PathBuf::from("c:/videos/a.meraki");
     let path_b = PathBuf::from("c:/videos/b.meraki");

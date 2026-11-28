@@ -1,3 +1,5 @@
+use crate::audio_eq::ParametricEq;
+use crate::audio_fader::AudioFader;
 use crate::frame_sink::LEVEL_INTERVAL_NS;
 use crate::protocol::TimelineRenderClip;
 use glib::prelude::*;
@@ -8,12 +10,10 @@ use gstreamer_controller::prelude::*;
 use gstreamer_editing_services as ges;
 use gstreamer_editing_services::prelude::*;
 use meraki_core::{
-    db_to_linear, AudioEffectKind, TrackAudioSettings, VolumeKeyframe, EQ_BAND_FREQUENCIES_HZ,
-    MAX_EQ_GAIN_DB, MIN_EQ_GAIN_DB,
+    db_to_linear, AudioEffectKind, TrackAudioSettings, VolumeKeyframe,
 };
 use tracing::{debug, warn};
 
-const EQ_BAND_WIDTHS_HZ: [f64; 4] = [120.0, 320.0, 1_400.0, 6_000.0];
 const NR_NAME: &str = "meraki_nr";
 const EQ_NAME: &str = "meraki_eq";
 const LEVELER_NAME: &str = "meraki_lvl";
@@ -23,12 +23,12 @@ const VOL_NAME: &str = "meraki_trk_vol";
 
 #[derive(Clone)]
 pub(crate) struct ClipAudioDsp {
-    pub(crate) eq: Option<gst::Element>,
+    pub(crate) eq: Option<ParametricEq>,
     pub(crate) noise_reduction: Option<gst::Element>,
     pub(crate) voice_leveler: Option<gst::Element>,
     pub(crate) echo: Option<gst::Element>,
     pub(crate) reverb: Option<gst::Element>,
-    pub(crate) volume: Option<gst::Element>,
+    pub(crate) volume: Option<AudioFader>,
 }
 
 pub(crate) fn effective_muted(settings: &TrackAudioSettings, any_solo: bool) -> bool {
@@ -36,9 +36,13 @@ pub(crate) fn effective_muted(settings: &TrackAudioSettings, any_solo: bool) -> 
 }
 
 pub(crate) fn build_dsp_chain_description(meter_name: Option<&str>) -> String {
-    let mut parts = vec!["audioconvert".to_string()];
+    let mut parts = vec!["audioconvert".to_string(), "audio/x-raw,format=F32LE,layout=interleaved".to_string()];
     if gst::ElementFactory::find("audioresample").is_some() {
         parts.push("audioresample".to_string());
+    }
+    if gst::ElementFactory::find("audiobuffersplit").is_some() {
+        // Permite reagir ao próximo bloco mesmo quando o decodificador entrega blocos longos.
+        parts.push("audiobuffersplit output-buffer-duration=1/200".to_string());
     }
     if gst::ElementFactory::find("audiocheblimit").is_some() {
         parts.push(format!("audiocheblimit name={NR_NAME} mode=high-pass poles=4 cutoff=0"));
@@ -95,12 +99,12 @@ pub(crate) fn resolve_clip_dsp(effect: &ges::Effect) -> ClipAudioDsp {
             })
     };
     ClipAudioDsp {
-        eq: find(EQ_NAME, "num-bands"),
+        eq: find(EQ_NAME, "num-bands").as_ref().and_then(ParametricEq::configure),
         noise_reduction: find(NR_NAME, "cutoff"),
         voice_leveler: find(LEVELER_NAME, "ratio"),
         echo: find(ECHO_NAME, "intensity"),
         reverb: find(REVERB_NAME, "level"),
-        volume: find(VOL_NAME, "volume"),
+        volume: find(VOL_NAME, "volume").map(AudioFader::new),
     }
 }
 
@@ -113,11 +117,7 @@ pub(crate) fn apply_settings_to_clip(
         apply_noise_reduction(nr, settings.noise_reduction_enabled, settings.noise_reduction_strength);
     }
     if let Some(ref eq) = dsp.eq {
-        if let Ok(proxy) = eq.clone().dynamic_cast::<gst::ChildProxy>() {
-            for (idx, gain_db) in settings.eq_gains_db.iter().enumerate() {
-                apply_eq_band_on_proxy(&proxy, idx, *gain_db);
-            }
-        }
+        eq.set_gains(settings.eq_gains_db);
     }
     if let Some(ref lvl) = dsp.voice_leveler {
         apply_voice_leveler(lvl, settings.voice_leveler_enabled);
@@ -129,19 +129,8 @@ pub(crate) fn apply_settings_to_clip(
         apply_reverb(reverb, settings.has_effect(AudioEffectKind::Reverb));
     }
     if let Some(ref vol) = dsp.volume {
-        vol.set_property("volume", db_to_linear(settings.gain_db));
-        vol.set_property("mute", effective_muted(settings, any_solo));
+        vol.set(db_to_linear(settings.gain_db), effective_muted(settings, any_solo));
     }
-}
-
-pub(crate) fn apply_eq_band_on_proxy(proxy: &gst::ChildProxy, idx: usize, gain_db: f32) {
-    let Some(band_obj) = proxy.child_by_index(idx as u32) else {
-        return;
-    };
-    let clamped = f64::from(gain_db.clamp(MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB));
-    set_numeric_prop(&band_obj, "freq", EQ_BAND_FREQUENCIES_HZ[idx]);
-    set_numeric_prop(&band_obj, "bandwidth", EQ_BAND_WIDTHS_HZ[idx]);
-    set_numeric_prop(&band_obj, "gain", clamped);
 }
 
 pub(crate) fn apply_noise_reduction(nr: &gst::Element, enabled: bool, strength: f32) {
@@ -163,17 +152,6 @@ pub(crate) fn apply_echo(echo: &gst::Element, enabled: bool) {
 
 pub(crate) fn apply_reverb(reverb: &gst::Element, enabled: bool) {
     reverb.set_property("level", if enabled { 0.35_f32 } else { 0.0_f32 });
-}
-
-fn set_numeric_prop(obj: &impl ObjectExt, name: &str, value: f64) {
-    let Some(pspec) = obj.find_property(name) else {
-        return;
-    };
-    if pspec.value_type() == glib::Type::F64 {
-        obj.set_property(name, value);
-    } else if pspec.value_type() == glib::Type::F32 {
-        obj.set_property(name, value as f32);
-    }
 }
 
 pub(crate) fn apply_volume_keyframes(

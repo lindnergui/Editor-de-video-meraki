@@ -1,3 +1,4 @@
+use crate::audio_output::MasterMix;
 use crate::clip_prepare;
 use crate::encoding_profiles;
 use crate::export_pipeline::{build_render_pipeline, detect_active_streams, RenderSpec};
@@ -17,7 +18,9 @@ struct ExportTask {
     job_id: ExportJobId,
     settings: ExportSettings,
     clips: Vec<TimelineRenderClip>,
+    transitions: Vec<meraki_core::TimelineTransition>,
     audio_tracks: Vec<TrackAudioMix>,
+    master: MasterMix,
     cancel_flag: Arc<AtomicBool>,
 }
 
@@ -58,7 +61,9 @@ impl ExportManager {
         job_id: ExportJobId,
         settings: ExportSettings,
         clips: Vec<TimelineRenderClip>,
+        transitions: Vec<meraki_core::TimelineTransition>,
         audio_tracks: Vec<TrackAudioMix>,
+        master: MasterMix,
     ) {
         let Some(tx) = &self.tx else {
             self.worker.emit_critical(EngineEvent::ExportFailed {
@@ -73,7 +78,7 @@ impl ExportManager {
             guard.insert(job_id, Arc::clone(&cancel_flag));
         }
 
-        let task = ExportTask { job_id, settings, clips, audio_tracks, cancel_flag };
+        let task = ExportTask { job_id, settings, clips, transitions, audio_tracks, master, cancel_flag };
         if let Err(err) = tx.try_send(task) {
             if let Ok(mut guard) = self.cancels.lock() {
                 guard.remove(&job_id);
@@ -152,7 +157,9 @@ impl Clone for ExportTask {
             job_id: self.job_id,
             settings: self.settings.clone(),
             clips: self.clips.clone(),
+            transitions: self.transitions.clone(),
             audio_tracks: self.audio_tracks.clone(),
+            master: self.master,
             cancel_flag: Arc::clone(&self.cancel_flag),
         }
     }
@@ -216,7 +223,9 @@ fn execute_render_inner(
         let (timeline, pipeline) = build_render_pipeline(RenderSpec {
             settings: &task.settings,
             audio_tracks: task.audio_tracks.clone(),
+            master: task.master,
             prepared: &prepared,
+            transitions: &task.transitions,
             profile: &resolved.profile,
             output_path: &output_path,
             worker,

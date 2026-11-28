@@ -1,6 +1,7 @@
 use crate::components::resettable_slider::{resettable_slider, ResettableSliderSpec};
 use crate::components::{easing_card, effect_param_controls};
 pub use crate::components::effects_params_panel::ZoomPreset;
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
@@ -9,8 +10,8 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 use meraki_core::{
-    Clip, ClipId, ClipTransform, EffectParameters, Keyframe, KeyframeEasing, KeyframeProperty,
-    Project, TitleOverlay, TitleStyle,
+    AppLanguage, Clip, ClipId, ClipTransform, EffectParameters, Keyframe, KeyframeEasing,
+    KeyframeProperty, Project, TitleOverlay, TitleStyle,
 };
 use uuid::Uuid;
 
@@ -73,17 +74,20 @@ pub fn view<'a>(
     playhead_ns: u64,
     active_easing: KeyframeEasing,
     drafts: EffectsInspectorDrafts<'a>,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsInspectorMessage> {
-    let header = text("INSPETOR DE EFEITOS")
+    let s = i18n::strings(lang);
+    let header = text(s.inspector_effects_title)
         .size(11)
         .font(theme::FONT_BOLD)
-        .color(theme::TEXT_SECONDARY);
+        .color(theme::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None);
 
     let selected = selected_clip_id.and_then(|id| project.timeline.clip(id).map(|(_, clip)| clip));
     let body: Element<'a, EffectsInspectorMessage> = match selected {
         Some(clip) => {
             let offset_ns = clip_local_offset_ns(clip, playhead_ns);
-            let mut controls = column![summary_card(project, clip)].spacing(10).width(Length::Fill);
+            let mut controls = column![summary_card(project, clip, lang)].spacing(10).width(Length::Fill);
 
             if let Some(ref title) = clip.title {
                 controls = controls.push(title_section(
@@ -91,6 +95,7 @@ pub fn view<'a>(
                     title,
                     drafts.title_text,
                     drafts.title_font_size,
+                    lang,
                 ));
             }
             if clip.title.is_none() || !clip.effects.is_empty() {
@@ -98,23 +103,18 @@ pub fn view<'a>(
                     clip,
                     drafts.selected_effect_id,
                     drafts.effect_params,
+                    lang,
                 ));
             }
-            controls = controls.push(transform_section(clip, offset_ns, drafts.transform));
-            controls = controls.push(keyframes_section(clip, offset_ns, active_easing));
+            controls = controls.push(transform_section(clip, offset_ns, drafts.transform, lang));
+            controls = controls.push(keyframes_section(clip, offset_ns, active_easing, lang));
 
             scrollable(controls).height(Length::Fill).style(theme::dark_scrollable).into()
         }
         None => container(
             column![
-                text("Nenhum clipe selecionado")
-                    .size(13)
-                    .font(theme::FONT_SEMIBOLD)
-                    .color(theme::TEXT_PRIMARY),
-                text("Selecione um vídeo na timeline ou adicione um Título na Biblioteca à esquerda.")
-                    .size(12)
-                    .color(theme::TEXT_SECONDARY)
-                    .align_x(Horizontal::Center),
+                text(s.inspector_none_selected).size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+                text(s.inspector_effects_none_desc).size(12).color(theme::TEXT_SECONDARY).align_x(Horizontal::Center),
             ]
             .spacing(8)
             .align_x(Horizontal::Center),
@@ -138,15 +138,20 @@ pub fn view<'a>(
     .into()
 }
 
-fn summary_card<'a>(project: &'a Project, clip: &'a Clip) -> Element<'a, EffectsInspectorMessage> {
+fn summary_card<'a>(
+    project: &'a Project,
+    clip: &'a Clip,
+    lang: AppLanguage,
+) -> Element<'a, EffectsInspectorMessage> {
+    let s = i18n::strings(lang);
     let name = clip
         .title
         .as_ref()
         .map(|t| t.text.as_str())
         .or_else(|| project.asset(clip.asset_id).map(|a| a.name.as_str()))
-        .unwrap_or("Clipe");
+        .unwrap_or(s.clip_default_name);
     let active_fx_count = clip.effects.iter().filter(|e| e.enabled).count();
-    let subtitle = format!("{active_fx_count} efeito(s) • {} keyframe(s)", clip.keyframes.len());
+    let subtitle = i18n::format_clip_fx_summary(lang, active_fx_count, clip.keyframes.len());
 
     container(
         column![
@@ -166,12 +171,14 @@ fn title_section<'a>(
     title: &'a TitleOverlay,
     title_draft: Option<&'a str>,
     font_size_draft: Option<u32>,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsInspectorMessage> {
+    let s = i18n::strings(lang);
     let input_value = title_draft.unwrap_or(title.text.as_str());
     let base_for_style = title.clone();
     let style_pills = row![
-        style_pill("Moderno", TitleStyle::ModernText, clip_id, &base_for_style),
-        style_pill("Legenda", TitleStyle::QuickCaption, clip_id, &base_for_style),
+        style_pill(s.title_style_modern, TitleStyle::ModernText, clip_id, &base_for_style),
+        style_pill(s.title_style_caption, TitleStyle::QuickCaption, clip_id, &base_for_style),
         style_pill("3D", TitleStyle::Title3D, clip_id, &base_for_style),
     ]
     .spacing(6);
@@ -184,24 +191,22 @@ fn title_section<'a>(
 
     container(
         column![
-            text("Texto").size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
-            text_input("Conteúdo do título...", input_value)
-                .on_input(move |s| EffectsInspectorMessage::TitleTextChanged(clip_id, s))
+            text(s.inspector_text_section).size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+            text_input(s.inspector_title_placeholder, input_value)
+                .on_input(move |txt| EffectsInspectorMessage::TitleTextChanged(clip_id, txt))
                 .size(12)
                 .padding([6, 8])
                 .style(theme::text_input_style),
             style_pills,
             resettable_slider(ResettableSliderSpec {
-                label: "Tamanho",
+                label: s.inspector_font_size,
                 value_label: format!("{effective_size} px"),
+                reset_tooltip: s.inspector_double_click_reset,
                 range: 16.0_f32..=120.0_f32,
                 step: 2.0_f32,
                 current: size_val,
                 on_change: Box::new(move |val| {
-                    EffectsInspectorMessage::PreviewTitleFontSize(
-                        clip_id,
-                        val.round().clamp(16.0, 120.0) as u32,
-                    )
+                    EffectsInspectorMessage::PreviewTitleFontSize(clip_id, val.round().clamp(16.0, 120.0) as u32)
                 }),
                 on_release: EffectsInspectorMessage::CommitTitleFontSize(clip_id),
                 on_reset: EffectsInspectorMessage::UpdateTitle(clip_id, reset_title),
@@ -230,7 +235,7 @@ fn style_pill<'a>(
     let active = current.style == style;
     let mut updated = current.clone();
     updated.style = style;
-    button(text(label).size(10).font(theme::FONT_MEDIUM))
+    button(text(label).size(10).font(theme::FONT_MEDIUM).wrapping(text::Wrapping::None))
         .padding([4, 7])
         .style(theme::filter_pill_button(active))
         .on_press(EffectsInspectorMessage::UpdateTitle(clip_id, updated))
@@ -241,16 +246,19 @@ fn transform_section<'a>(
     clip: &'a Clip,
     offset_ns: u64,
     transform_draft: Option<ClipTransform>,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsInspectorMessage> {
+    let s = i18n::strings(lang);
     let clip_id = clip.id;
     let tr = transform_draft.unwrap_or(clip.transform);
     let defaults = ClipTransform::default();
     let opacity_pct = (tr.opacity * 100.0).round().clamp(0.0, 100.0);
+    let tip = s.inspector_double_click_reset;
 
     let header = row![
-        text("Transformar").size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+        text(s.inspector_transform).size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
         horizontal_space(),
-        button(text("Resetar").size(11).color(theme::TEXT_SECONDARY))
+        button(text(s.reset).size(11).color(theme::TEXT_SECONDARY).wrapping(text::Wrapping::None))
             .padding([3, 8])
             .style(theme::ghost_button)
             .on_press(EffectsInspectorMessage::UpdateTransform(clip_id, defaults)),
@@ -260,11 +268,7 @@ fn transform_section<'a>(
     column![
         header,
         keyframed_slider(
-            "Posição X",
-            format!("{:.0} px", tr.pos_x),
-            -960.0_f32..=960.0_f32,
-            1.0_f32,
-            tr.pos_x,
+            s.inspector_pos_x, format!("{:.0} px", tr.pos_x), tip, -960.0_f32..=960.0_f32, 1.0_f32, tr.pos_x,
             find_keyframe_near(clip, KeyframeProperty::PosX, offset_ns).is_some(),
             move |pos_x| EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_x, ..tr }),
             EffectsInspectorMessage::CommitTransform(clip_id),
@@ -272,11 +276,7 @@ fn transform_section<'a>(
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::PosX },
         ),
         keyframed_slider(
-            "Posição Y",
-            format!("{:.0} px", tr.pos_y),
-            -540.0_f32..=540.0_f32,
-            1.0_f32,
-            tr.pos_y,
+            s.inspector_pos_y, format!("{:.0} px", tr.pos_y), tip, -540.0_f32..=540.0_f32, 1.0_f32, tr.pos_y,
             find_keyframe_near(clip, KeyframeProperty::PosY, offset_ns).is_some(),
             move |pos_y| EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { pos_y, ..tr }),
             EffectsInspectorMessage::CommitTransform(clip_id),
@@ -284,11 +284,7 @@ fn transform_section<'a>(
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::PosY },
         ),
         keyframed_slider(
-            "Escala",
-            format!("{:.0}%", tr.scale * 100.0),
-            0.10_f32..=3.0_f32,
-            0.05_f32,
-            tr.scale,
+            s.inspector_scale, format!("{:.0}%", tr.scale * 100.0), tip, 0.10_f32..=3.0_f32, 0.05_f32, tr.scale,
             find_keyframe_near(clip, KeyframeProperty::Scale, offset_ns).is_some(),
             move |scale| EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { scale, ..tr }),
             EffectsInspectorMessage::CommitTransform(clip_id),
@@ -296,16 +292,9 @@ fn transform_section<'a>(
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::Scale },
         ),
         keyframed_slider(
-            "Opacidade",
-            format!("{opacity_pct:.0}%"),
-            0.0_f32..=100.0_f32,
-            1.0_f32,
-            opacity_pct,
+            s.inspector_opacity, format!("{opacity_pct:.0}%"), tip, 0.0_f32..=100.0_f32, 1.0_f32, opacity_pct,
             find_keyframe_near(clip, KeyframeProperty::Opacity, offset_ns).is_some(),
-            move |pct| {
-                let opacity = (pct / 100.0).clamp(0.0, 1.0);
-                EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { opacity, ..tr })
-            },
+            move |pct| EffectsInspectorMessage::PreviewTransform(clip_id, ClipTransform { opacity: (pct / 100.0).clamp(0.0, 1.0), ..tr }),
             EffectsInspectorMessage::CommitTransform(clip_id),
             EffectsInspectorMessage::UpdateTransform(clip_id, ClipTransform { opacity: defaults.opacity, ..tr }),
             EffectsInspectorMessage::ToggleKeyframe { clip_id, property: KeyframeProperty::Opacity },
@@ -319,6 +308,7 @@ fn transform_section<'a>(
 fn keyframed_slider<'a>(
     label: &'a str,
     value_label: String,
+    reset_tooltip: &'a str,
     range: std::ops::RangeInclusive<f32>,
     step: f32,
     current: f32,
@@ -339,6 +329,7 @@ fn keyframed_slider<'a>(
     resettable_slider(ResettableSliderSpec {
         label,
         value_label,
+        reset_tooltip,
         range,
         step,
         current,
@@ -353,18 +344,15 @@ fn keyframes_section<'a>(
     clip: &'a Clip,
     offset_ns: u64,
     active_easing: KeyframeEasing,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsInspectorMessage> {
+    let s = i18n::strings(lang);
     let sec = (offset_ns as f64) / 1_000_000_000.0;
     container(
         column![
-            text("Movimento & Keyframes")
-                .size(13)
-                .font(theme::FONT_SEMIBOLD)
-                .color(theme::TEXT_PRIMARY),
-            easing_card::easing_selector(active_easing, EffectsInspectorMessage::SetEasing),
-            text(format!("Instante: {sec:.2}s • {} keyframe(s)", clip.keyframes.len()))
-                .size(10)
-                .color(theme::TEXT_SECONDARY),
+            text(s.inspector_motion_keyframes).size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+            easing_card::easing_selector(active_easing, lang, EffectsInspectorMessage::SetEasing),
+            text(i18n::format_keyframe_instant(lang, sec, clip.keyframes.len())).size(10).color(theme::TEXT_SECONDARY),
         ]
         .spacing(8),
     )

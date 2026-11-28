@@ -1,4 +1,5 @@
 use crate::audio_dsp::AudioDspController;
+use crate::audio_output::MasterMix;
 use crate::clip_prepare;
 pub use crate::clip_prepare::PipelineError;
 use crate::live_commands::ClipPatch;
@@ -7,13 +8,14 @@ use crate::protocol::{EngineEvent, EngineWorkerChannel, TimelineRenderClip, Trac
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_editing_services as ges;
-use meraki_core::{ClipId, PreviewQuality, TrackKind};
+use meraki_core::{ClipId, PreviewQuality, ProxyMode, TimelineTransition, TrackKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
 
 mod transport;
+mod proxy_preview;
 #[cfg(test)]
 mod tests;
 use transport::ReverseClock;
@@ -24,13 +26,17 @@ pub(crate) struct PlaybackEngine {
     worker: Arc<EngineWorkerChannel>,
     asset_cache: HashMap<String, ges::UriClipAsset>,
     playback_rate: f64,
-    master_volume: f32,
+    master: MasterMix,
     is_playing: bool,
     last_position_ns: u64,
     pending_seek_ns: Option<u64>,
     reverse: Option<ReverseClock>,
     pending_shuttle_rate: Option<f64>,
     clips: Vec<TimelineRenderClip>,
+    transitions: Vec<TimelineTransition>,
+    proxy_mode: ProxyMode,
+    cache_clears_pending: usize,
+    selected_proxies: HashMap<ClipId, std::path::PathBuf>,
     preview_quality: PreviewQuality,
     refresh_pending: bool,
     last_refresh: Option<Instant>,
@@ -39,19 +45,23 @@ pub(crate) struct PlaybackEngine {
 
 impl PlaybackEngine {
     pub(crate) fn new(worker: Arc<EngineWorkerChannel>) -> Result<Self, PipelineError> {
-        let graph = PlaybackGraph::new(&[], Vec::new(), PreviewQuality::default(), &worker)?;
+        let graph = PlaybackGraph::new(&[], &[], Vec::new(), PreviewQuality::default(), &worker)?;
         Ok(Self {
             graph,
             worker,
             asset_cache: HashMap::new(),
             playback_rate: 1.0,
-            master_volume: 1.0,
+            master: MasterMix::default(),
             is_playing: false,
             last_position_ns: 0,
             pending_seek_ns: None,
             reverse: None,
             pending_shuttle_rate: None,
             clips: Vec::new(),
+            transitions: Vec::new(),
+            proxy_mode: ProxyMode::default(),
+            cache_clears_pending: 0,
+            selected_proxies: HashMap::new(),
             preview_quality: PreviewQuality::default(),
             refresh_pending: false,
             last_refresh: None,
@@ -66,25 +76,29 @@ impl PlaybackEngine {
     pub(crate) async fn sync_timeline(
         &mut self,
         clips: Vec<TimelineRenderClip>,
+        transitions: Vec<TimelineTransition>,
         audio_mix: Vec<TrackAudioMix>,
         preview_quality: PreviewQuality,
     ) -> Result<(), PipelineError> {
-        let prepared = clip_prepare::prepare_clips(&mut self.asset_cache, clips).await?;
+        let use_proxies = self.proxy_mode != ProxyMode::Off && self.cache_clears_pending == 0;
+        let prepared = clip_prepare::prepare_preview_clips(&mut self.asset_cache, clips, use_proxies).await?;
         // Cada pipeline GES contém seu próprio playsink e streamsynchronizer.
         // Reiniciar o mesmo pipeline durante o preroll pode recriar pads ainda presentes.
-        let next = PlaybackGraph::new(&prepared, audio_mix, preview_quality, &self.worker)?;
-        next.set_master_volume(self.master_volume);
-        if self.reverse.is_some() {
-            next.mute_master(true);
-        }
+        let next = PlaybackGraph::new(&prepared, &transitions, audio_mix, preview_quality, &self.worker)?;
+        next.set_master(self.master, self.reverse.is_some());
 
         let was_playing = self.is_playing;
-        let resume_pos_ns = self.position_for_seek();
+        let resume_pos_ns = self.position_for_seek().min(next.duration_ns.saturating_sub(1));
         self.graph.set_state(gst::State::Null)?;
         self.graph = next;
+        self.transitions = transitions;
+        self.selected_proxies = prepared.iter().filter_map(|item| {
+            item.selected_proxy.clone().map(|path| (item.render.clip_id, path))
+        }).collect();
         self.clips = prepared.into_iter().map(|item| item.render).collect();
         self.preview_quality = preview_quality;
         self.is_playing = false;
+        self.last_position_ns = resume_pos_ns;
         self.pending_seek_ns = None;
         self.refresh_pending = false;
         self.rate_needs_seek = false;
@@ -132,7 +146,7 @@ impl PlaybackEngine {
                 snapshot[index] = clip;
             }
             let mix = self.graph.audio_dsp.settings_snapshot();
-            return self.sync_timeline(snapshot, mix, self.preview_quality).await;
+            return self.sync_timeline(snapshot, self.transitions.clone(), mix, self.preview_quality).await;
         }
         for (index, clip) in changes {
             if let Some(video) = self.graph.active_video.get(&clip.clip_id) {
@@ -151,12 +165,29 @@ impl PlaybackEngine {
                 reason: "volume deve ser um número finito",
             });
         }
-        self.master_volume = volume.clamp(0.0, 1.0);
-        self.graph.set_master_volume(self.master_volume);
-        if self.reverse.is_some() {
-            self.graph.mute_master(true);
-        }
+        self.master.gain = f64::from(volume.clamp(0.0, 1.0));
+        self.graph.set_master(self.master, self.reverse.is_some());
         Ok(())
+    }
+
+    pub(crate) fn update_master(&mut self, db: Option<f64>, mute: Option<bool>) -> Result<(), PipelineError> {
+        if let Some(db) = db {
+            let db = crate::audio_dsp::checked_db(db, "master_volume_db", meraki_core::MIN_TRACK_GAIN_DB, meraki_core::MAX_TRACK_GAIN_DB)?;
+            self.master.gain = meraki_core::db_to_linear(db);
+        }
+        if let Some(mute) = mute {
+            self.master.muted = mute;
+        }
+        self.graph.set_master(self.master, self.reverse.is_some());
+        Ok(())
+    }
+
+    pub(crate) fn master_mix(&self) -> MasterMix {
+        self.master
+    }
+
+    pub(crate) fn publish_audio_spectrum(&self, worker: &EngineWorkerChannel) {
+        self.graph.spectrum.publish(worker);
     }
 
     pub(crate) fn set_preview_quality(&mut self, quality: PreviewQuality) {
@@ -165,6 +196,7 @@ impl PlaybackEngine {
     }
 
     pub(crate) fn queue_seek(&mut self, position_ns: u64) {
+        self.graph.spectrum = Default::default();
         self.last_position_ns = position_ns;
         self.pending_seek_ns = self.graph.has_clips.then_some(position_ns);
     }
@@ -239,6 +271,9 @@ impl PlaybackEngine {
                     debug!("fim da timeline alcançado (EOS)");
                 }
                 gst::MessageView::Element(element_msg) => {
+                    if self.is_playing {
+                        self.graph.spectrum.receive(element_msg, worker);
+                    }
                     self.graph
                         .audio_meter
                         .handle_element_message(element_msg, worker);
@@ -259,6 +294,7 @@ impl PlaybackEngine {
                 continue;
             }
             let Some(video) = self.graph.active_video.get_mut(&clip.clip_id) else { continue };
+            let video = &mut video.primary;
             let bounds = video.title_bounds(canvas);
             if video.last_title_bounds != bounds
                 && self.worker.try_emit(EngineEvent::TitleBounds { clip_id: clip.clip_id, bounds })

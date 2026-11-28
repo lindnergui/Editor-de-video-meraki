@@ -61,6 +61,7 @@ fn mp4_preview_survives_effect_resync_and_scrubbing() {
 fn sync_clip(handle: &EngineHandle, clip: &TimelineRenderClip) {
     handle
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips: vec![clip.clone()],
             audio_mix: Vec::new(),
             preview_quality: PreviewQuality::Proxy720p,

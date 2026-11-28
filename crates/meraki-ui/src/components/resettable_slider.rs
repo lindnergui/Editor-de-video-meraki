@@ -25,6 +25,7 @@ pub fn is_double_click(previous: Option<Instant>, now: Instant) -> bool {
 pub struct ResettableSliderSpec<'a, Message> {
     pub label: &'a str,
     pub value_label: String,
+    pub reset_tooltip: &'a str,
     pub range: RangeInclusive<f32>,
     pub step: f32,
     pub current: f32,
@@ -41,6 +42,7 @@ pub fn resettable_slider<'a, Message: Clone + 'a>(
     let ResettableSliderSpec {
         label,
         value_label,
+        reset_tooltip,
         range,
         step,
         current,
@@ -55,14 +57,11 @@ pub fn resettable_slider<'a, Message: Clone + 'a>(
             .size(11)
             .font(theme::FONT_SEMIBOLD)
             .color(theme::ACCENT_HOVER)
+            .wrapping(text::Wrapping::None)
             .into(),
         on_reset.clone(),
     );
-    let value_with_tip = icon_tooltip(
-        value_target,
-        "Clique duas vezes para restaurar o padrão",
-        Position::Top,
-    );
+    let value_with_tip = icon_tooltip(value_target, reset_tooltip, Position::Top);
 
     let mut header_row = row![
         text(label)
@@ -88,7 +87,7 @@ pub fn resettable_slider<'a, Message: Clone + 'a>(
 
     let interactive_slider = icon_tooltip(
         double_click_target(slider_widget, on_reset),
-        "Clique duas vezes para restaurar o padrão",
+        reset_tooltip,
         Position::Top,
     );
 

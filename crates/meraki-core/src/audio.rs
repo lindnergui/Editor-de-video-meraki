@@ -1,3 +1,4 @@
+use crate::audio_eq::AudioPreset;
 use crate::project::EqBand;
 use crate::timeline::TimelineError;
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ pub const MIN_EQ_GAIN_DB: f32 = -12.0;
 pub const MAX_EQ_GAIN_DB: f32 = 12.0;
 pub const MIN_VOLUME_KF_DB: f32 = -48.0;
 pub const MAX_VOLUME_KF_DB: f32 = 12.0;
-pub const EQ_BAND_FREQUENCIES_HZ: [f64; 4] = [100.0, 400.0, 2_000.0, 8_000.0];
+pub const EQ_BAND_FREQUENCIES_HZ: [f64; 4] = [90.0, 320.0, 2_200.0, 8_500.0];
 
 /// Presets de voz exibidos na aba Áudio para equalização e melhoria instantânea.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -136,6 +137,7 @@ pub struct TrackAudioSettings {
     pub noise_reduction_strength: f32,
     pub voice_leveler_enabled: bool,
     pub voice_preset: Option<VoicePreset>,
+    pub audio_preset: Option<AudioPreset>,
     pub effects: Vec<AudioEffectKind>,
 }
 
@@ -150,6 +152,7 @@ impl Default for TrackAudioSettings {
             noise_reduction_strength: 0.5,
             voice_leveler_enabled: false,
             voice_preset: None,
+            audio_preset: None,
             effects: Vec::new(),
         }
     }
@@ -207,6 +210,7 @@ impl TrackAudioSettings {
             ),
             voice_leveler_enabled: self.voice_leveler_enabled,
             voice_preset: self.voice_preset,
+            audio_preset: self.audio_preset,
             effects,
         }
     }
@@ -242,6 +246,11 @@ pub fn db_to_linear(db: f32) -> f64 {
         return 0.0;
     }
     10_f64.powf(f64::from(db) / 20.0).clamp(0.0, 10.0)
+}
+
+/// Garante ganho finito e seguro de trilha/master entre `-60.0 dB` e `+12.0 dB`.
+pub fn clamp_track_gain_db(gain_db: f32) -> f32 {
+    sanitize_clamped(gain_db, 0.0, MIN_TRACK_GAIN_DB, MAX_TRACK_GAIN_DB)
 }
 
 fn sanitize_clamped(value: f32, fallback: f32, min: f32, max: f32) -> f32 {

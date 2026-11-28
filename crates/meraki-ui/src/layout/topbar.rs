@@ -3,11 +3,13 @@ use crate::app_project_io::{ProjectIoMessage, ProjectIoState};
 use crate::app_screens::ScreenMessage;
 use crate::components::settings_menu::SettingsMenuMessage;
 use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::{icons, theme, window_icon};
 use iced::alignment::Vertical;
 use iced::widget::tooltip::Position;
 use iced::widget::{button, container, row, text, text_input};
 use iced::{Element, Length};
+use meraki_core::AppLanguage;
 
 /// Barra superior minimalista do Editor: marca + Projetos, título editável, Engrenagem e Exportar.
 pub fn view<'a>(
@@ -15,15 +17,18 @@ pub fn view<'a>(
     project_io: &'a ProjectIoState,
     settings_open: bool,
     is_delivery_active: bool,
+    lang: AppLanguage,
 ) -> Element<'a, Message> {
+    let s = i18n::strings(lang);
     let projects_btn = icon_tooltip(
         button(
             row![
                 icons::icon(icons::HOME, 13.0, theme::TEXT_SECONDARY),
-                text("Projetos")
+                text(s.topbar_projects)
                     .size(11)
                     .font(theme::FONT_MEDIUM)
-                    .color(theme::TEXT_SECONDARY),
+                    .color(theme::TEXT_SECONDARY)
+                    .wrapping(text::Wrapping::None),
             ]
             .spacing(5)
             .align_y(Vertical::Center),
@@ -31,7 +36,7 @@ pub fn view<'a>(
         .padding([5, 9])
         .style(theme::ghost_button)
         .on_press(Message::Screen(ScreenMessage::OpenProjectHub)),
-        "Voltar para Projetos",
+        s.topbar_projects_tip,
         Position::Bottom,
     );
 
@@ -50,7 +55,7 @@ pub fn view<'a>(
         .align_left(Length::FillPortion(1))
         .center_y(Length::Fill);
 
-    let center_slot = container(project_name_control(project_name, project_io))
+    let center_slot = container(project_name_control(project_name, project_io, lang))
         .center_x(Length::FillPortion(1))
         .center_y(Length::Fill);
 
@@ -73,16 +78,17 @@ pub fn view<'a>(
         .on_press(Message::Screen(ScreenMessage::SettingsMenu(
             SettingsMenuMessage::Toggle,
         ))),
-        "Configurações",
+        s.topbar_settings_tip,
         Position::Bottom,
     );
 
     let export_content = row![
         icons::icon(icons::EXPORT, 14.0, theme::TEXT_ON_ACCENT),
-        text("Exportar")
+        text(s.topbar_export)
             .size(13)
             .font(theme::FONT_SEMIBOLD)
-            .color(theme::TEXT_ON_ACCENT),
+            .color(theme::TEXT_ON_ACCENT)
+            .wrapping(text::Wrapping::None),
     ]
     .spacing(6)
     .align_y(Vertical::Center);
@@ -96,7 +102,7 @@ pub fn view<'a>(
                 theme::export_button
             })
             .on_press(Message::ExportClicked),
-        "Exportar",
+        s.topbar_export,
         Position::Bottom,
     );
 
@@ -124,9 +130,11 @@ pub fn view<'a>(
 fn project_name_control<'a>(
     project_name: &'a str,
     project_io: &'a ProjectIoState,
+    lang: AppLanguage,
 ) -> Element<'a, Message> {
+    let s = i18n::strings(lang);
     if project_io.editing_name {
-        let input = text_input("Nome do projeto...", &project_io.name_draft)
+        let input = text_input(s.topbar_project_name_placeholder, &project_io.name_draft)
             .on_input(|val| Message::ProjectIo(ProjectIoMessage::NameDraftChanged(val)))
             .on_submit(Message::ProjectIo(ProjectIoMessage::CommitRename))
             .width(Length::Fixed(220.0))
@@ -135,7 +143,7 @@ fn project_name_control<'a>(
             .style(theme::text_input_style);
 
         let confirm_btn = button(
-            text("OK")
+            text(s.ok)
                 .size(11)
                 .font(theme::FONT_SEMIBOLD)
                 .color(theme::TEXT_ON_ACCENT),
@@ -177,5 +185,5 @@ fn project_name_control<'a>(
     .style(theme::ghost_button)
     .on_press(Message::ProjectIo(ProjectIoMessage::StartRename));
 
-    icon_tooltip(name_btn, "Renomear Projeto", Position::Bottom)
+    icon_tooltip(name_btn, s.topbar_rename_tip, Position::Bottom)
 }

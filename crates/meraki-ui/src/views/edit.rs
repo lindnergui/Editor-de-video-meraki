@@ -1,11 +1,14 @@
 use crate::app_project_io::ProjectIoState;
+use crate::app_proxy::ProxyBannerState;
 use crate::components::inspector::{self, InspectorMessage};
 use crate::components::media_thumb::asset_thumbnail;
 use crate::components::player::{self, PlayerMessage};
 use crate::components::timeline_canvas::{self, TimelineCanvasMessage};
 use crate::components::timeline_math::{TimelineTool, TimelineViewState};
+use crate::i18n;
 use crate::playback::PlaybackState;
 use crate::views::files_model::{filtered_assets, format_duration_mm_ss, FilesState, MediaFilter};
+use crate::views::transition_inspector::{self, TransitionInspectorMessage};
 use crate::{icons, theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
@@ -13,7 +16,8 @@ use iced::widget::{
     text_input, vertical_rule, Column, Row,
 };
 use iced::{Element, Length};
-use meraki_core::{AssetId, ClipId, ClipTransform, FolderId, HistoryStack, KeymapProfile, MediaAsset, Project};
+use meraki_core::{AppLanguage, AssetId, ClipId, ClipTransform, FolderId, HistoryStack, KeymapProfile, MediaAsset, Project};
+use uuid::Uuid;
 
 /// Estado local da aba Edição (gaveta compacta de mídia, rascunho e ferramentas/zoom da timeline).
 #[derive(Debug, Clone, Default)]
@@ -22,6 +26,7 @@ pub struct EditState {
     pub selected_folder: Option<FolderId>,
     pub timeline: TimelineViewState,
     pub transform_draft: Option<(ClipId, ClipTransform)>,
+    pub transition_duration_draft: Option<(Uuid, u64)>,
 }
 
 /// Mensagens de interação da aba Edição roteadas por `MerakiApp`.
@@ -32,6 +37,7 @@ pub enum EditMessage {
     InsertAsset(AssetId),
     Player(PlayerMessage),
     Inspector(InspectorMessage),
+    TransitionInspector(TransitionInspectorMessage),
     Timeline(TimelineCanvasMessage),
 }
 
@@ -58,6 +64,7 @@ impl EditState {
 }
 
 /// Renderiza o layout completo da aba Edição: topo 3 colunas (240px | Player | 280px) + timeline.
+#[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
     project: &'a Project,
     playback: &'a PlaybackState,
@@ -65,12 +72,22 @@ pub fn view<'a>(
     state: &'a EditState,
     project_io: &'a ProjectIoState,
     profile: KeymapProfile,
+    lang: AppLanguage,
+    proxy_banner: ProxyBannerState,
 ) -> Element<'a, EditMessage> {
-    let media_drawer = media_drawer_column(project, state, project_io);
-    let player_panel = player::view(project, playback, history.can_undo(), history.can_redo(), profile)
+    let media_drawer = media_drawer_column(project, state, project_io, lang);
+    let player_panel = player::view(project, playback, history.can_undo(), history.can_redo(), profile, lang, proxy_banner)
         .map(EditMessage::Player);
-    let inspector_panel = inspector::view(project, playback.selected_clip_id, state.transform_draft)
-        .map(EditMessage::Inspector);
+    let selected_tr = playback
+        .selected_transition_id
+        .and_then(|id| project.timeline.transition(id));
+    let inspector_panel = if let Some(tr) = selected_tr {
+        transition_inspector::view(project, tr, state.transition_duration_draft, lang)
+            .map(EditMessage::TransitionInspector)
+    } else {
+        inspector::view(project, playback.selected_clip_id, state.transform_draft, lang)
+            .map(EditMessage::Inspector)
+    };
 
     let top_row = container(
         row![
@@ -87,7 +104,7 @@ pub fn view<'a>(
     .height(Length::FillPortion(66));
 
     let bottom_timeline = container(
-        timeline_canvas::view(project, playback, &state.timeline, profile).map(EditMessage::Timeline),
+        timeline_canvas::view(project, playback, &state.timeline, profile, lang).map(EditMessage::Timeline),
     )
     .width(Length::Fill)
     .height(Length::FillPortion(34));
@@ -106,9 +123,11 @@ fn media_drawer_column<'a>(
     project: &'a Project,
     state: &'a EditState,
     project_io: &'a ProjectIoState,
+    lang: AppLanguage,
 ) -> Element<'a, EditMessage> {
+    let s = i18n::strings(lang);
     let header = row![
-        text("MÍDIA DO PROJETO").size(11).font(theme::FONT_BOLD).color(theme::TEXT_SECONDARY),
+        text(s.files_project_media).size(11).font(theme::FONT_BOLD).color(theme::TEXT_SECONDARY).wrapping(text::Wrapping::None),
         horizontal_space(),
         text(format!("{}", project.assets.len())).size(11).color(theme::TEXT_SECONDARY),
     ]
@@ -116,7 +135,7 @@ fn media_drawer_column<'a>(
 
     let search = row![
         icons::icon(icons::SEARCH, 13.0, theme::TEXT_SECONDARY),
-        text_input("Pesquisar mídia...", &state.search_query)
+        text_input(s.edit_search_placeholder, &state.search_query)
             .on_input(EditMessage::SearchChanged)
             .size(12)
             .padding([5, 8])
@@ -127,7 +146,7 @@ fn media_drawer_column<'a>(
 
     let mut folder_pills = Row::new()
         .spacing(4)
-        .push(folder_pill("Todas", None, state.selected_folder.is_none()));
+        .push(folder_pill(s.edit_all_folders, None, state.selected_folder.is_none()));
     for folder in project.child_folders(None) {
         let active = state.selected_folder == Some(folder.id);
         folder_pills = folder_pills.push(folder_pill(folder.name.as_str(), Some(folder.id), active));
@@ -144,7 +163,7 @@ fn media_drawer_column<'a>(
 
     let body: Element<'a, EditMessage> = if assets.is_empty() {
         container(
-            text("Nenhuma mídia nesta pasta")
+            text(s.edit_empty_folder)
                 .size(12)
                 .color(theme::TEXT_SECONDARY)
                 .align_x(Horizontal::Center),

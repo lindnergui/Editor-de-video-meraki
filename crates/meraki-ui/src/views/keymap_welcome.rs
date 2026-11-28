@@ -1,8 +1,9 @@
+use crate::i18n;
 use crate::{theme, window_icon};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, column, container, horizontal_space, row, text};
 use iced::{Background, Border, Element, Length};
-use meraki_core::{KeymapProfile, ShortcutAction};
+use meraki_core::{AppLanguage, KeymapProfile, ShortcutAction};
 
 /// Ações emitidas pela tela de boas-vindas e seleção de perfil de atalhos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,18 +40,19 @@ fn profile_card_style(selected: bool) -> impl Fn(&iced::Theme, button::Status) -
 }
 
 /// Renderiza a tela centralizada 2x2 de escolha do perfil de atalhos sobre `#111218`.
-pub fn view<'a>(selected: KeymapProfile, can_go_back: bool) -> Element<'a, KeymapWelcomeMessage> {
+pub fn view<'a>(selected: KeymapProfile, can_go_back: bool, lang: AppLanguage) -> Element<'a, KeymapWelcomeMessage> {
+    let s = i18n::strings(lang);
     let header = column![
         row![
             window_icon::brand_icon(32.0),
-            text("Bem-vindo ao Meraki")
+            text(s.welcome_title)
                 .size(26)
                 .font(theme::FONT_BOLD)
                 .color(theme::TEXT_PRIMARY),
         ]
         .spacing(12)
         .align_y(Vertical::Center),
-        text("Escolha o estilo de atalhos de teclado com o qual você já está acostumado (você pode alterar depois).")
+        text(s.welcome_subtitle)
             .size(14)
             .color(theme::TEXT_SECONDARY)
             .align_x(Horizontal::Center),
@@ -60,15 +62,15 @@ pub fn view<'a>(selected: KeymapProfile, can_go_back: bool) -> Element<'a, Keyma
 
     let profiles = KeymapProfile::all();
     let row_top = row![
-        profile_card(profiles[0], profiles[0] == selected),
-        profile_card(profiles[1], profiles[1] == selected),
+        profile_card(profiles[0], profiles[0] == selected, lang),
+        profile_card(profiles[1], profiles[1] == selected, lang),
     ]
     .spacing(14)
     .width(Length::Fill);
 
     let row_bottom = row![
-        profile_card(profiles[2], profiles[2] == selected),
-        profile_card(profiles[3], profiles[3] == selected),
+        profile_card(profiles[2], profiles[2] == selected, lang),
+        profile_card(profiles[3], profiles[3] == selected, lang),
     ]
     .spacing(14)
     .width(Length::Fill);
@@ -76,9 +78,9 @@ pub fn view<'a>(selected: KeymapProfile, can_go_back: bool) -> Element<'a, Keyma
     let grid = column![row_top, row_bottom].spacing(14).width(Length::Fill);
 
     let continue_label = if can_go_back {
-        "Continuar"
+        s.welcome_continue
     } else {
-        "Continuar para Projetos"
+        s.welcome_continue_projects
     };
     let continue_btn = button(
         text(continue_label)
@@ -92,7 +94,7 @@ pub fn view<'a>(selected: KeymapProfile, can_go_back: bool) -> Element<'a, Keyma
 
     let footer = if can_go_back {
         let back_btn = button(
-            text("Voltar")
+            text(s.welcome_back)
                 .size(13)
                 .font(theme::FONT_MEDIUM)
                 .color(theme::TEXT_PRIMARY),
@@ -126,10 +128,11 @@ pub fn view<'a>(selected: KeymapProfile, can_go_back: bool) -> Element<'a, Keyma
         .into()
 }
 
-fn profile_card<'a>(profile: KeymapProfile, selected: bool) -> Element<'a, KeymapWelcomeMessage> {
+fn profile_card<'a>(profile: KeymapProfile, selected: bool, lang: AppLanguage) -> Element<'a, KeymapWelcomeMessage> {
+    let s = i18n::strings(lang);
     let badge: Element<'a, KeymapWelcomeMessage> = if selected {
         container(
-            text("Selecionado")
+            text(s.welcome_selected)
                 .size(10)
                 .font(theme::FONT_BOLD)
                 .color(theme::TEXT_ON_ACCENT),
@@ -138,7 +141,7 @@ fn profile_card<'a>(profile: KeymapProfile, selected: bool) -> Element<'a, Keyma
         .style(theme::badge_accent)
         .into()
     } else {
-        container(text("Clique para selecionar").size(10).color(theme::TEXT_SECONDARY)).into()
+        container(text(s.welcome_click_select).size(10).color(theme::TEXT_SECONDARY)).into()
     };
 
     let head = row![
@@ -152,18 +155,18 @@ fn profile_card<'a>(profile: KeymapProfile, selected: bool) -> Element<'a, Keyma
     .align_y(Vertical::Center);
 
     let key_rows = column![
-        shortcut_row("Cortar", profile.shortcut_label(ShortcutAction::SplitAtPlayhead)),
-        shortcut_row("Selecionar", profile.shortcut_label(ShortcutAction::ToolSelect)),
-        shortcut_row("Snap", profile.shortcut_label(ShortcutAction::ToggleSnap)),
-        shortcut_row("Play/Pause", profile.shortcut_label(ShortcutAction::PlayPause)),
-        shortcut_row("Refazer", profile.shortcut_label(ShortcutAction::Redo)),
+        shortcut_row(s.welcome_action_cut, profile.shortcut_label(ShortcutAction::SplitAtPlayhead)),
+        shortcut_row(s.welcome_action_select, profile.shortcut_label(ShortcutAction::ToolSelect)),
+        shortcut_row(s.welcome_action_snap, profile.shortcut_label(ShortcutAction::ToggleSnap)),
+        shortcut_row(s.welcome_action_play_pause, profile.shortcut_label(ShortcutAction::PlayPause)),
+        shortcut_row(s.welcome_action_redo, profile.shortcut_label(ShortcutAction::Redo)),
     ]
     .spacing(6);
 
     button(
         column![
             head,
-            text(profile.subtitle()).size(12).color(theme::TEXT_SECONDARY),
+            text(i18n::keymap_subtitle(lang, profile)).size(12).color(theme::TEXT_SECONDARY),
             key_rows,
         ]
         .spacing(12)
@@ -184,8 +187,10 @@ fn shortcut_row<'a>(action_label: &'a str, key_label: &'a str) -> Element<'a, Ke
             text(key_label)
                 .size(11)
                 .font(theme::FONT_SEMIBOLD)
-                .color(theme::TEXT_PRIMARY),
+                .color(theme::TEXT_PRIMARY)
+                .wrapping(text::Wrapping::None),
         )
+        .width(Length::Shrink)
         .padding([3, 8])
         .style(theme::badge),
     ]

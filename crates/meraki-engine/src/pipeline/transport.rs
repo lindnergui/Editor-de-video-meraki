@@ -113,7 +113,7 @@ impl PlaybackEngine {
     pub(super) fn stop_reverse(&mut self) -> bool {
         let stopped = self.reverse.take().is_some();
         if stopped {
-            self.graph.set_master_volume(self.master_volume);
+            self.graph.set_master(self.master, false);
         }
         stopped
     }

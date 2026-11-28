@@ -248,7 +248,7 @@ fn apply_scale_or_zoom(
     bind_curve(track_elem, "height", mode, inpoint_ns, &h_pts);
 }
 
-fn bind_curve(
+pub(crate) fn bind_curve(
     track_elem: &ges::TrackElement,
     prop: &str,
     mode: gst_ctrl::InterpolationMode,

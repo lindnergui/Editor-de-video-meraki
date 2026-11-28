@@ -285,13 +285,20 @@ impl Project {
 
     /// Atualiza os metadados técnicos descobertos pelo motor para um ativo existente.
     pub fn apply_discovered_metadata(&mut self, metadata: MediaMetadata) -> bool {
-        let Some(asset) = self.asset_mut(metadata.asset_id) else { return false; };
+        let asset_id = metadata.asset_id;
+        let Some(asset) = self.asset_mut(asset_id) else { return false; };
+        let is_fixed_duration = asset.kind != MediaKind::Image;
         asset.metadata = metadata;
         let duration_ns = asset.metadata.duration_ns;
         if duration_ns > 0 {
             if asset.in_point_ns >= duration_ns { asset.in_point_ns = 0; }
-            if asset.out_point_ns.is_none_or(|out_ns| out_ns > duration_ns) {
-                asset.out_point_ns = Some(duration_ns);
+            if asset.out_point_ns.is_none_or(|out_ns| out_ns > duration_ns) { asset.out_point_ns = Some(duration_ns); }
+            if is_fixed_duration {
+                for clip in self.timeline.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()) {
+                    if clip.asset_id == asset_id && clip.title.is_none() && clip.media_duration_ns < duration_ns {
+                        clip.media_duration_ns = duration_ns;
+                    }
+                }
             }
         }
         true

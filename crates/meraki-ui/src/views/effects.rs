@@ -1,3 +1,4 @@
+use crate::app_proxy::ProxyBannerState;
 use crate::components::effects_inspector::{self, EffectsInspectorDrafts, EffectsInspectorMessage};
 use crate::components::effects_library::{
     self, EffectsLibraryMessage, EffectsLibraryState, LibrarySection,
@@ -8,11 +9,12 @@ use crate::components::timeline_canvas::{self, TimelineCanvasMessage};
 use crate::components::timeline_math::TimelineViewState;
 use crate::playback::PlaybackState;
 use crate::theme;
+use crate::views::transition_inspector::{self, TransitionInspectorMessage};
 use iced::widget::{column, container, horizontal_rule, image, row, vertical_rule};
 use iced::{Element, Length};
 use meraki_core::{
-    ClipId, ClipTransform, EffectParameters, HistoryStack, KeyframeEasing, KeyframeProperty,
-    KeymapProfile, Project, TrackKind,
+    AppLanguage, ClipId, ClipTransform, EffectParameters, HistoryStack, KeyframeEasing,
+    KeyframeProperty, KeymapProfile, Project, TrackKind,
 };
 use uuid::Uuid;
 
@@ -28,6 +30,7 @@ pub struct EffectsState {
     pub transform_draft: Option<(ClipId, ClipTransform)>,
     pub effect_params_draft: Option<(ClipId, Uuid, EffectParameters)>,
     pub selected_effect_id: Option<Uuid>,
+    pub transition_duration_draft: Option<(Uuid, u64)>,
 }
 
 impl Default for EffectsState {
@@ -42,6 +45,7 @@ impl Default for EffectsState {
             transform_draft: None,
             effect_params_draft: None,
             selected_effect_id: None,
+            transition_duration_draft: None,
         }
     }
 }
@@ -53,6 +57,7 @@ pub enum EffectsMessage {
     Player(PlayerMessage),
     Overlay(PlayerOverlayMessage),
     Inspector(EffectsInspectorMessage),
+    TransitionInspector(TransitionInspectorMessage),
     Timeline(TimelineCanvasMessage),
 }
 
@@ -62,6 +67,9 @@ impl EffectsState {
         match msg {
             EffectsMessage::Library(EffectsLibraryMessage::SearchChanged(q)) => {
                 self.library.search_query = q.clone();
+            }
+            EffectsMessage::Library(EffectsLibraryMessage::SetTransitionPlacement(mode)) => {
+                self.library.transition_placement = *mode;
             }
             EffectsMessage::Library(EffectsLibraryMessage::ToggleSection(section)) => match section {
                 LibrarySection::Transitions => {
@@ -108,18 +116,25 @@ pub fn next_title_start_ns(project: &Project, playhead_ns: u64, duration_ns: u64
 }
 
 /// Renderiza a aba Efeitos completa: Biblioteca (`240px`) | Player + Overlay | Inspetor (`280px`) + Timeline (`T1` no topo).
+#[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
     project: &'a Project,
     playback: &'a PlaybackState,
     history: &'a HistoryStack,
     state: &'a EffectsState,
     profile: KeymapProfile,
+    lang: AppLanguage,
+    proxy_banner: ProxyBannerState,
 ) -> Element<'a, EffectsMessage> {
     let selected_clip = playback
         .selected_clip_id
         .and_then(|id| project.timeline.clip(id).map(|(_, clip)| clip));
+    let selected_tr = playback
+        .selected_transition_id
+        .and_then(|id| project.timeline.transition(id));
 
-    let library_panel = effects_library::view(&state.library, selected_clip).map(EffectsMessage::Library);
+    let library_panel = effects_library::view(&state.library, selected_clip, selected_tr, lang)
+        .map(EffectsMessage::Library);
     let title_bounds = selected_clip.filter(|clip| {
         clip.timeline_start_ns <= playback.playhead_ns
             && playback.playhead_ns < clip.timeline_start_ns.saturating_add(clip.duration_ns)
@@ -156,17 +171,25 @@ pub fn view<'a>(
         history.can_undo(),
         history.can_redo(),
         profile,
+        lang,
+        proxy_banner,
         EffectsMessage::Player,
         overlay,
     );
-    let inspector_panel = effects_inspector::view(
-        project,
-        playback.selected_clip_id,
-        playback.playhead_ns,
-        state.active_easing,
-        drafts,
-    )
-    .map(EffectsMessage::Inspector);
+    let inspector_panel = if let Some(tr) = selected_tr {
+        transition_inspector::view(project, tr, state.transition_duration_draft, lang)
+            .map(EffectsMessage::TransitionInspector)
+    } else {
+        effects_inspector::view(
+            project,
+            playback.selected_clip_id,
+            playback.playhead_ns,
+            state.active_easing,
+            drafts,
+            lang,
+        )
+        .map(EffectsMessage::Inspector)
+    };
 
     let top_row = container(
         row![
@@ -183,7 +206,7 @@ pub fn view<'a>(
     .height(Length::FillPortion(66));
 
     let bottom_timeline = container(
-        timeline_canvas::view_with_options(project, playback, &state.timeline, profile, true)
+        timeline_canvas::view_with_options(project, playback, &state.timeline, profile, lang, true)
             .map(EffectsMessage::Timeline),
     )
     .width(Length::Fill)

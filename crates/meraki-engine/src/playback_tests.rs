@@ -17,6 +17,7 @@ fn media_render_clip(path: PathBuf, track_kind: TrackKind, duration_ns: u64) -> 
         clip_id: ClipId::new(),
         track_id: TrackId::new(),
         path,
+        proxy_path: None,
         track_kind,
         timeline_start_ns: 0,
         source_in_ns: 0,
@@ -124,6 +125,7 @@ fn ges_playback_syncs_timeline_renders_rgba_frames_seeks_and_reports_errors() {
 
     handle
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips,
             audio_mix: Vec::new(),
             preview_quality: PreviewQuality::Proxy720p,
@@ -190,6 +192,7 @@ fn ges_playback_syncs_timeline_renders_rgba_frames_seeks_and_reports_errors() {
     handle.send(EngineCommand::SetPlaybackRate(0.0)).unwrap();
     handle
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips: vec![media_render_clip(missing.0.clone(), TrackKind::Video, 1_000_000_000)],
             audio_mix: Vec::new(),
             preview_quality: PreviewQuality::Proxy720p,
@@ -207,6 +210,7 @@ fn ges_playback_syncs_timeline_renders_rgba_frames_seeks_and_reports_errors() {
 
     handle
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips: Vec::new(),
             audio_mix: Vec::new(),
             preview_quality: PreviewQuality::Proxy720p,
@@ -246,6 +250,7 @@ fn ges_title_clip_effects_transitions_keyframes_and_asset_cache_sync_cleanly() {
         clip_id: ClipId::new(),
         track_id: TrackId::new(),
         path: PathBuf::new(),
+        proxy_path: None,
         track_kind: TrackKind::Overlay,
         timeline_start_ns: 0,
         source_in_ns: 0,
@@ -266,6 +271,7 @@ fn ges_title_clip_effects_transitions_keyframes_and_asset_cache_sync_cleanly() {
 
     handle
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips: vec![video_clip, title_clip],
             audio_mix: Vec::new(),
             preview_quality: PreviewQuality::Proxy720p,
@@ -285,6 +291,7 @@ fn ges_title_clip_effects_transitions_keyframes_and_asset_cache_sync_cleanly() {
         clip_id: ClipId::new(),
         track_id: TrackId::new(),
         path: PathBuf::new(),
+        proxy_path: None,
         track_kind: TrackKind::Overlay,
         timeline_start_ns: 0,
         source_in_ns: 0,
@@ -300,6 +307,7 @@ fn ges_title_clip_effects_transitions_keyframes_and_asset_cache_sync_cleanly() {
 
     handle
         .send(EngineCommand::SyncTimeline {
+            transitions: Vec::new(),
             clips: vec![cached_video, cached_title],
             audio_mix: Vec::new(),
             preview_quality: PreviewQuality::Proxy720p,

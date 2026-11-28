@@ -84,6 +84,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
         clip_id: ClipId::new(),
         track_id: track_a,
         path: wav_in.clone(),
+        proxy_path: None,
         track_kind: TrackKind::Audio,
         timeline_start_ns: 0,
         source_in_ns: 0,
@@ -112,6 +113,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
 
     handle
         .send(EngineCommand::StartExport {
+            transitions: Vec::new(),
             job_id: wav_job,
             settings: wav_settings,
             clips: vec![audio_clip.clone()],
@@ -136,6 +138,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
         clip_id: ClipId::new(),
         track_id: track_v,
         path: PathBuf::new(),
+        proxy_path: None,
         track_kind: TrackKind::Overlay,
         timeline_start_ns: 0,
         source_in_ns: 0,
@@ -157,6 +160,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
 
     handle
         .send(EngineCommand::StartExport {
+            transitions: Vec::new(),
             job_id: mp4_job,
             settings: mp4_settings,
             clips: vec![title_clip.clone(), audio_clip.clone()],
@@ -183,6 +187,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
 
     handle
         .send(EngineCommand::StartExport {
+            transitions: Vec::new(),
             job_id: mp4_job_2,
             settings: mp4_settings_2,
             clips: vec![short_title, short_audio],
@@ -205,6 +210,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
         clip_id: ClipId::new(),
         track_id: track_v,
         path: mp4_out,
+        proxy_path: None,
         track_kind: TrackKind::Video,
         volume_keyframes: Vec::new(),
         ..audio_clip.clone()
@@ -212,6 +218,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
     let long_title = TimelineRenderClip { duration_ns: 5_000_000_000, ..title_clip };
     handle
         .send(EngineCommand::StartExport {
+            transitions: Vec::new(),
             job_id: mp3_job,
             settings: mp3_settings,
             clips: vec![video_with_audio, long_title],
@@ -240,6 +247,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
 
     handle
         .send(EngineCommand::StartExport {
+            transitions: Vec::new(),
             job_id: blocker_job,
             settings: blocker_settings,
             clips: vec![audio_clip.clone()],
@@ -248,6 +256,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
         .unwrap();
     handle
         .send(EngineCommand::StartExport {
+            transitions: Vec::new(),
             job_id: cancelled_job,
             settings: cancelled_settings,
             clips: vec![audio_clip],
@@ -275,6 +284,7 @@ fn exporter_renders_real_wav_mp4_and_mp3_and_supports_cancel_and_error_reporting
     bad_settings.output_dir = dir.0.clone();
     handle
         .send(EngineCommand::StartExport {
+            transitions: Vec::new(),
             job_id: bad_job,
             settings: bad_settings,
             clips: Vec::new(),

@@ -3,7 +3,8 @@ use crate::app_delivery::DeliveryState;
 use crate::app_exit_guard::PendingExitAction;
 use crate::app_preferences::{load_preferences_from, save_preferences_to};
 use crate::app_project_io::{short_file_label, ProjectIoMessage, ProjectIoState};
-use crate::components::settings_menu::{self, SettingsMenuMessage};
+use crate::components::delete_project_modal;
+use crate::components::settings_menu::{self, SettingsMenuContext, SettingsMenuMessage};
 use crate::navigation::WorkspaceTab;
 use crate::playback::PlaybackState;
 use crate::project_storage::{
@@ -159,11 +160,12 @@ impl MerakiApp {
             let _ = self.engine.send(EngineCommand::Pause);
         }
 
+        let default_name = crate::i18n::strings(self.preferences.language).status_untitled_project;
         let (project, managed_path, create_err) =
-            match create_managed_project_in(&self.projects_dir, "Projeto sem título") {
+            match create_managed_project_in(&self.projects_dir, default_name) {
                 Ok((proj, path)) => (proj, Some(path), None),
                 Err(err) => {
-                    let mut fallback = Project::new("Projeto sem título");
+                    let mut fallback = Project::new(default_name);
                     fallback.timeline.ensure_mixer_audio_tracks();
                     (fallback, None, Some(err))
                 }
@@ -194,28 +196,21 @@ impl MerakiApp {
             self.record_recent_project(self.project.name.clone(), path);
         }
         let _ = self.sync_timeline_to_engine();
+        self.apply_proxy_preference();
     }
 
     pub(crate) fn handle_screen_message(&mut self, msg: ScreenMessage) -> Task<Message> {
         match msg {
-            ScreenMessage::OpenProjectHub => {
-                self.request_exit_action(PendingExitAction::ReturnToProjectHub)
-            }
+            ScreenMessage::OpenProjectHub => self.request_exit_action(PendingExitAction::ReturnToProjectHub),
             ScreenMessage::OpenKeymapWelcome(return_to) => {
                 self.screens.settings_menu_open = false;
                 self.screens.welcome_selected = self.preferences.keymap;
-                self.screens.screen = AppScreen::KeymapWelcome {
-                    return_to,
-                    can_go_back: true,
-                };
+                self.screens.screen = AppScreen::KeymapWelcome { return_to, can_go_back: true };
                 Task::none()
             }
             ScreenMessage::SettingsMenu(menu_msg) => self.handle_settings_menu_message(menu_msg),
             ScreenMessage::ProjectHub(hub_msg) => self.handle_project_hub_message(hub_msg),
-            ScreenMessage::KeymapWelcome(kw_msg) => {
-                self.handle_keymap_welcome_message(kw_msg);
-                Task::none()
-            }
+            ScreenMessage::KeymapWelcome(kw_msg) => { self.handle_keymap_welcome_message(kw_msg); Task::none() }
         }
     }
 
@@ -252,9 +247,7 @@ impl MerakiApp {
         match msg {
             ProjectHubMessage::SearchChanged(q) => self.screens.hub.search_query = q,
             ProjectHubMessage::NewProjectClicked => self.reset_to_new_project(),
-            ProjectHubMessage::ToggleSettings => {
-                self.screens.settings_menu_open = !self.screens.settings_menu_open;
-            }
+            ProjectHubMessage::ToggleSettings => self.screens.settings_menu_open = !self.screens.settings_menu_open,
             ProjectHubMessage::OpenFileDialog => {
                 self.screens.settings_menu_open = false;
                 return self.handle_project_io_message(ProjectIoMessage::Open);
@@ -262,23 +255,16 @@ impl MerakiApp {
             ProjectHubMessage::OpenShortcuts => {
                 self.screens.settings_menu_open = false;
                 self.screens.welcome_selected = self.preferences.keymap;
-                self.screens.screen = AppScreen::KeymapWelcome {
-                    return_to: WelcomeReturnTarget::ProjectHub,
-                    can_go_back: true,
-                };
+                self.screens.screen = AppScreen::KeymapWelcome { return_to: WelcomeReturnTarget::ProjectHub, can_go_back: true };
             }
             ProjectHubMessage::OpenRecent(path) => {
-                if let Err(err) = self.open_project_from_path(&path) {
-                    self.last_error = Some(err);
-                }
+                if let Err(err) = self.open_project_from_path(&path) { self.last_error = Some(err); }
             }
             ProjectHubMessage::StartRename { path, current_name } => {
                 self.screens.hub.renaming_path = Some(path);
                 self.screens.hub.rename_draft = current_name;
             }
-            ProjectHubMessage::RenameDraftChanged(draft) => {
-                self.screens.hub.rename_draft = draft;
-            }
+            ProjectHubMessage::RenameDraftChanged(draft) => self.screens.hub.rename_draft = draft,
             ProjectHubMessage::CommitRename => self.commit_hub_rename(),
             ProjectHubMessage::CancelRename => {
                 self.screens.hub.renaming_path = None;
@@ -295,6 +281,9 @@ impl MerakiApp {
                     self.screens.hub.rename_draft.clear();
                 }
             }
+            ProjectHubMessage::RequestDeleteProject(path) => self.request_delete_project(path),
+            ProjectHubMessage::ConfirmDeleteProject => self.confirm_delete_project(),
+            ProjectHubMessage::CancelDeleteProject => self.cancel_delete_project(),
         }
         Task::none()
     }
@@ -356,6 +345,7 @@ impl MerakiApp {
     }
 
     pub(crate) fn render_current_screen(&self) -> Element<'_, Message> {
+        let lang = self.preferences.language;
         match self.screens.screen {
             AppScreen::ProjectHub => {
                 let hub = project_hub::view(
@@ -363,19 +353,29 @@ impl MerakiApp {
                     &self.preferences.recent_projects,
                     self.screens.settings_menu_open,
                     self.last_error.as_deref(),
+                    lang,
                 )
                 .map(|m| Message::Screen(ScreenMessage::ProjectHub(m)));
-                settings_menu::overlay(
+                let with_delete = delete_project_modal::overlay(
                     hub,
+                    self.screens.hub.pending_delete_project.as_ref(),
+                    lang,
+                );
+                settings_menu::overlay(
+                    with_delete,
                     self.screens.settings_menu_open,
-                    false,
-                    false,
-                    self.preferences.keymap,
-                    &self.projects_dir,
+                    SettingsMenuContext {
+                        in_editor: false,
+                        is_dirty: false,
+                        profile: self.preferences.keymap,
+                        language: lang,
+                        proxy_mode: self.preferences.proxy_mode,
+                        status_notice: self.project_io.status_notice.as_deref(),
+                    },
                 )
             }
             AppScreen::KeymapWelcome { can_go_back, .. } => {
-                keymap_welcome::view(self.screens.welcome_selected, can_go_back)
+                keymap_welcome::view(self.screens.welcome_selected, can_go_back, lang)
                     .map(|m| Message::Screen(ScreenMessage::KeymapWelcome(m)))
             }
             AppScreen::Editor => self.view_editor(),

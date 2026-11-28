@@ -1,13 +1,19 @@
 use crate::components::effects_library::matches_query;
 use crate::components::timeline_math::format_ruler_label;
+use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::{Horizontal, Vertical};
+use iced::widget::tooltip::Position;
 use iced::widget::{
     button, column, container, horizontal_rule, horizontal_space, row, scrollable, text,
     text_input, Column,
 };
 use iced::{Element, Length};
-use meraki_core::{AssetId, AudioEffectKind, MediaAsset, MediaKind, Project, TrackAudioSettings, VoicePreset};
+use meraki_core::{
+    AppLanguage, AssetId, AudioEffectKind, AudioPreset, MediaAsset, MediaKind, Project,
+    TrackAudioSettings, VoicePreset,
+};
 
 /// Mensagens emitidas pelo painel esquerdo da aba Áudio.
 #[derive(Debug, Clone)]
@@ -15,6 +21,7 @@ pub enum AudioLibraryMessage {
     SearchChanged(String),
     ImportAudioClicked,
     AddAudioToSelectedTrack(AssetId),
+    ApplyAudioPreset(AudioPreset),
     ApplyVoicePreset(VoicePreset),
     ToggleAudioEffect(AudioEffectKind),
 }
@@ -25,15 +32,18 @@ pub fn view<'a>(
     search_query: &'a str,
     selected_track_name: &'a str,
     settings: &TrackAudioSettings,
+    lang: AppLanguage,
 ) -> Element<'a, AudioLibraryMessage> {
-    let header = text("BIBLIOTECA & PRESETS DE ÁUDIO")
+    let s = i18n::strings(lang);
+    let header = text(s.audio_library_title)
         .size(11)
         .font(theme::FONT_BOLD)
-        .color(theme::TEXT_SECONDARY);
+        .color(theme::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None);
 
     let search = row![
         icons::icon(icons::SEARCH, 13.0, theme::TEXT_SECONDARY),
-        text_input("Buscar áudios...", search_query)
+        text_input(s.audio_search_placeholder, search_query)
             .on_input(AudioLibraryMessage::SearchChanged)
             .size(12)
             .padding([5, 8])
@@ -43,7 +53,7 @@ pub fn view<'a>(
     .align_y(Vertical::Center);
 
     let assets_header = row![
-        text("Músicas & Efeitos (SFX)")
+        text(s.audio_music_sfx)
             .size(12)
             .font(theme::FONT_SEMIBOLD)
             .color(theme::TEXT_PRIMARY),
@@ -51,7 +61,11 @@ pub fn view<'a>(
         button(
             row![
                 icons::icon(icons::PLUS, 11.0, theme::TEXT_PRIMARY),
-                text("Importar").size(10).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+                text(s.audio_import_short)
+                    .size(10)
+                    .font(theme::FONT_SEMIBOLD)
+                    .color(theme::TEXT_PRIMARY)
+                    .wrapping(text::Wrapping::None),
             ]
             .spacing(4)
             .align_y(Vertical::Center),
@@ -66,20 +80,16 @@ pub fn view<'a>(
         .assets
         .iter()
         .filter(|asset| asset.kind == MediaKind::Audio)
-        .filter(|asset| matches_query(search_query, &asset.name, "audio musica sfx trilha"))
+        .filter(|asset| matches_query(search_query, &asset.name, "audio musica music sfx trilha"))
         .collect();
 
     let mut list_col = Column::new().spacing(6).width(Length::Fill);
     if audio_assets.is_empty() {
         list_col = list_col.push(
-            container(
-                text("Nenhum áudio importado.")
-                    .size(11)
-                    .color(theme::TEXT_SECONDARY),
-            )
-            .width(Length::Fill)
-            .padding(10)
-            .style(theme::card),
+            container(text(s.audio_empty).size(11).color(theme::TEXT_SECONDARY))
+                .width(Length::Fill)
+                .padding(10)
+                .style(theme::card),
         );
     } else {
         for asset in audio_assets {
@@ -111,29 +121,31 @@ pub fn view<'a>(
     }
 
     let presets_header =
-        text("Presets de Voz").size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY);
+        text(s.audio_presets_title).size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY);
     let presets_grid = column![
         row![
-            preset_card(VoicePreset::Podcast, settings.voice_preset == Some(VoicePreset::Podcast)),
-            preset_card(VoicePreset::ClearVoice, settings.voice_preset == Some(VoicePreset::ClearVoice)),
+            audio_preset_card(AudioPreset::YouTubeVoice, settings.audio_preset == Some(AudioPreset::YouTubeVoice), lang),
+            audio_preset_card(AudioPreset::Music, settings.audio_preset == Some(AudioPreset::Music), lang),
         ]
         .spacing(6),
         row![
-            preset_card(
-                VoicePreset::EnhanceVoice,
-                settings.voice_preset == Some(VoicePreset::EnhanceVoice),
-            ),
-            preset_card(VoicePreset::Radio, settings.voice_preset == Some(VoicePreset::Radio)),
+            audio_preset_card(AudioPreset::Podcast, settings.audio_preset == Some(AudioPreset::Podcast), lang),
+            audio_preset_card(AudioPreset::ClearVoice, settings.audio_preset == Some(AudioPreset::ClearVoice), lang),
+        ]
+        .spacing(6),
+        row![
+            audio_preset_card(AudioPreset::Cinema, settings.audio_preset == Some(AudioPreset::Cinema), lang),
+            audio_preset_card(AudioPreset::Radio, settings.audio_preset == Some(AudioPreset::Radio), lang),
         ]
         .spacing(6),
     ]
     .spacing(6);
 
     let fx_header =
-        text("Efeitos de Áudio").size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY);
+        text(s.audio_effects_title).size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY);
     let fx_row = row![
-        effect_card(AudioEffectKind::Reverb, settings.has_effect(AudioEffectKind::Reverb)),
-        effect_card(AudioEffectKind::Echo, settings.has_effect(AudioEffectKind::Echo)),
+        effect_card(AudioEffectKind::Reverb, settings.has_effect(AudioEffectKind::Reverb), lang),
+        effect_card(AudioEffectKind::Echo, settings.has_effect(AudioEffectKind::Echo), lang),
     ]
     .spacing(6);
 
@@ -161,28 +173,38 @@ pub fn view<'a>(
     .into()
 }
 
-fn preset_card<'a>(preset: VoicePreset, active: bool) -> Element<'a, AudioLibraryMessage> {
-    button(
+fn audio_preset_card<'a>(
+    preset: AudioPreset,
+    active: bool,
+    lang: AppLanguage,
+) -> Element<'a, AudioLibraryMessage> {
+    let btn = button(
         container(
-            text(preset.label())
-                .size(11)
+            text(i18n::audio_preset_label(lang, preset))
+                .size(10.5)
                 .font(theme::FONT_SEMIBOLD)
-                .color(if active { theme::TEXT_ON_ACCENT } else { theme::TEXT_PRIMARY }),
+                .color(if active { theme::TEXT_ON_ACCENT } else { theme::TEXT_PRIMARY })
+                .wrapping(text::Wrapping::None),
         )
         .width(Length::Fill)
         .align_x(Horizontal::Center),
     )
     .width(Length::Fill)
-    .padding([8, 6])
-    .style(theme::media_card_button(active))
-    .on_press(AudioLibraryMessage::ApplyVoicePreset(preset))
-    .into()
+    .padding([7, 5])
+    .style(theme::filter_pill_button(active))
+    .on_press(AudioLibraryMessage::ApplyAudioPreset(preset));
+
+    icon_tooltip(btn, i18n::audio_preset_description(lang, preset), Position::Right)
 }
 
-fn effect_card<'a>(kind: AudioEffectKind, active: bool) -> Element<'a, AudioLibraryMessage> {
+fn effect_card<'a>(
+    kind: AudioEffectKind,
+    active: bool,
+    lang: AppLanguage,
+) -> Element<'a, AudioLibraryMessage> {
     button(
         container(
-            text(kind.label())
+            text(i18n::audio_effect_label(lang, kind))
                 .size(11)
                 .font(theme::FONT_SEMIBOLD)
                 .color(if active { theme::ACCENT_HOVER } else { theme::TEXT_PRIMARY }),

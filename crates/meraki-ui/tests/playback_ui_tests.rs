@@ -209,7 +209,9 @@ fn keyboard_shortcuts_and_transport_commands_behave_accurately() {
 
     let _ = app.update(Message::Playback(PlaybackMessage::SetMasterVolume(0.75)));
     assert_eq!(app.master_volume(), 0.75);
-    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::SetMasterVolume(v)) if (v - 0.75).abs() < 1e-6));
+    assert!(matches!(worker.try_recv_command(), Some(EngineCommand::UpdateAudioLive {
+        master_volume_db: Some(db), ..
+    }) if (db - 20.0 * 0.75_f64.log10()).abs() < 1e-6));
 
     let _ = app.update(Message::Playback(PlaybackMessage::SetPreviewQuality(PreviewQuality::Full1080p)));
     assert_eq!(app.preview_quality(), PreviewQuality::Full1080p);

@@ -56,13 +56,7 @@ impl ClipTransform {
     }
 }
 
-/// Tipo de transição de entrada ou saída suportado pelo editor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum TransitionKind {
-    Fade,
-    Zoom,
-    Blur,
-}
+pub use crate::transitions::TransitionKind;
 
 /// Extremidade de um clipe na qual a transição é aplicada.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

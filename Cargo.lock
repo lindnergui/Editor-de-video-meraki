@@ -2552,7 +2552,7 @@ dependencies = [
 
 [[package]]
 name = "meraki-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "meraki-core",
  "meraki-engine",
@@ -2564,7 +2564,7 @@ dependencies = [
 
 [[package]]
 name = "meraki-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2574,7 +2574,7 @@ dependencies = [
 
 [[package]]
 name = "meraki-engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytes",
  "crossbeam-channel",
@@ -2585,16 +2585,18 @@ dependencies = [
  "gstreamer-editing-services",
  "gstreamer-pbutils",
  "gstreamer-video",
+ "libc",
  "meraki-core",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "meraki-ui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytes",
  "iced",

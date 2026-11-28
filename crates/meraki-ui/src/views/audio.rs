@@ -1,3 +1,4 @@
+use crate::app_proxy::ProxyBannerState;
 use crate::components::audio_library::{self, AudioLibraryMessage};
 use crate::components::audio_timeline::{self, AudioTimelineMessage};
 use crate::components::eq_canvas::{self, EqMessage};
@@ -8,7 +9,10 @@ use crate::playback::PlaybackState;
 use crate::theme;
 use iced::widget::{column, container, horizontal_rule, row, vertical_rule};
 use iced::{Element, Length};
-use meraki_core::{HistoryStack, KeymapProfile, Project, Track, TrackAudioSettings, TrackId, TrackKind};
+use meraki_core::{
+    AppLanguage, HistoryStack, KeymapProfile, Project, Track, TrackAudioSettings, TrackId,
+    TrackKind,
+};
 use std::path::PathBuf;
 
 /// Estado local da aba Áudio (busca, trilha selecionada e snapshots de arraste).
@@ -20,6 +24,8 @@ pub struct AudioState {
     pub eq_drag_origin: Option<(TrackId, TrackAudioSettings)>,
     pub gain_drag_origin: Option<(TrackId, TrackAudioSettings)>,
     pub nr_drag_origin: Option<(TrackId, TrackAudioSettings)>,
+    pub master_gain_drag_origin: Option<f32>,
+    pub auto_eq_notice: Option<&'static str>,
 }
 
 /// Mensagens da aba Áudio roteadas por `MerakiApp`.
@@ -57,12 +63,15 @@ pub fn resolve_selected_audio_track(
 /// Renderiza a aba Áudio completa:
 /// Topo: Biblioteca (`240px`) | Player Compacto (`~34%`) | EQ + Melhorias (`~66%`) | Mixer (`250px`)
 /// Base: Timeline expandida de áudio (`~36%` da altura).
+#[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
     project: &'a Project,
     playback: &'a PlaybackState,
     history: &'a HistoryStack,
     state: &'a AudioState,
     profile: KeymapProfile,
+    lang: AppLanguage,
+    proxy_banner: ProxyBannerState,
 ) -> Element<'a, AudioMessage> {
     let audio_tracks: Vec<&Track> =
         project.timeline.tracks.iter().filter(|t| t.kind == TrackKind::Audio).collect();
@@ -72,7 +81,7 @@ pub fn view<'a>(
     let active_settings = selected_track.map(|t| t.audio.clone()).unwrap_or_default();
 
     let library_panel =
-        audio_library::view(project, &state.search_query, selected_name, &active_settings)
+        audio_library::view(project, &state.search_query, selected_name, &active_settings, lang)
             .map(AudioMessage::Library);
 
     let player_panel = container(player::view_compact(
@@ -81,12 +90,22 @@ pub fn view<'a>(
         history.can_undo(),
         history.can_redo(),
         profile,
+        lang,
+        proxy_banner,
         AudioMessage::Player,
     ))
     .width(Length::FillPortion(34))
     .height(Length::Fill);
 
-    let eq_panel = eq_canvas::view(selected_name, &active_settings).map(AudioMessage::Eq);
+    let eq_panel = eq_canvas::view(
+        selected_name,
+        &active_settings,
+        playback.audio_spectrum,
+        playback.is_playing,
+        state.auto_eq_notice,
+        lang,
+    )
+    .map(AudioMessage::Eq);
     let center_split = row![
         player_panel,
         vertical_rule(1).style(theme::divider),
@@ -95,7 +114,14 @@ pub fn view<'a>(
     .width(Length::Fill)
     .height(Length::Fill);
 
-    let mixer_panel = mixer::view(&audio_tracks, selected_id, playback).map(AudioMessage::Mixer);
+    let mixer_panel = mixer::view(
+        &audio_tracks,
+        selected_id,
+        project.timeline.master_gain_db,
+        playback,
+        lang,
+    )
+    .map(AudioMessage::Mixer);
 
     let top_row = container(
         row![
@@ -112,7 +138,7 @@ pub fn view<'a>(
     .height(Length::FillPortion(64));
 
     let bottom_timeline = container(
-        audio_timeline::view(project, playback, &state.timeline, selected_id)
+        audio_timeline::view(project, playback, &state.timeline, selected_id, lang)
             .map(AudioMessage::Timeline),
     )
     .width(Length::Fill)

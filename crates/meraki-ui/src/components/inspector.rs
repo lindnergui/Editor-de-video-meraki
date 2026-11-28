@@ -1,9 +1,10 @@
 use crate::components::resettable_slider::{resettable_slider, ResettableSliderSpec};
+use crate::i18n;
 use crate::theme;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, column, container, horizontal_rule, horizontal_space, row, scrollable, text};
 use iced::{Element, Length};
-use meraki_core::{ClipId, ClipTransform, Project};
+use meraki_core::{AppLanguage, ClipId, ClipTransform, Project};
 
 /// Ações do painel direito Inspetor conectadas ao `UpdateClipTransformCommand`.
 #[derive(Debug, Clone)]
@@ -18,11 +19,14 @@ pub fn view<'a>(
     project: &'a Project,
     selected_clip_id: Option<ClipId>,
     transform_draft: Option<(ClipId, ClipTransform)>,
+    lang: AppLanguage,
 ) -> Element<'a, InspectorMessage> {
-    let header = text("INSPETOR")
+    let s = i18n::strings(lang);
+    let header = text(s.inspector_title)
         .size(11)
         .font(theme::FONT_BOLD)
-        .color(theme::TEXT_SECONDARY);
+        .color(theme::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None);
 
     let selected = selected_clip_id.and_then(|id| project.timeline.clip(id).map(|(_, clip)| clip));
     let body: Element<'a, InspectorMessage> = match selected {
@@ -34,12 +38,12 @@ pub fn view<'a>(
             let defaults = ClipTransform::default();
             let asset_name = project
                 .asset(clip.asset_id)
-                .map_or("Clipe", |asset| asset.name.as_str());
+                .map_or(s.clip_default_name, |asset| asset.name.as_str());
 
             let section_bar = row![
-                text("Transformar").size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+                text(s.inspector_transform).size(13).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
                 horizontal_space(),
-                button(text("Resetar").size(11).color(theme::TEXT_SECONDARY))
+                button(text(s.reset).size(11).color(theme::TEXT_SECONDARY).wrapping(text::Wrapping::None))
                     .padding([4, 8])
                     .style(theme::ghost_button)
                     .on_press(InspectorMessage::UpdateTransform(clip_id, defaults)),
@@ -47,11 +51,12 @@ pub fn view<'a>(
             .align_y(Vertical::Center);
 
             let opacity_pct = (tr.opacity * 100.0).round().clamp(0.0, 100.0);
+            let reset_tip = s.inspector_double_click_reset;
             let controls = column![
                 container(
                     column![
                         text(asset_name).size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
-                        text("Ajustes espaciais e temporais").size(11).color(theme::TEXT_SECONDARY),
+                        text(s.inspector_spatial_hint).size(11).color(theme::TEXT_SECONDARY),
                     ]
                     .spacing(2),
                 )
@@ -60,8 +65,9 @@ pub fn view<'a>(
                 .style(theme::card),
                 section_bar,
                 resettable_slider(ResettableSliderSpec {
-                    label: "Escala",
+                    label: s.inspector_scale,
                     value_label: format!("{:.0}%", tr.scale * 100.0),
+                    reset_tooltip: reset_tip,
                     range: 0.10_f32..=3.0_f32,
                     step: 0.05_f32,
                     current: tr.scale,
@@ -73,8 +79,9 @@ pub fn view<'a>(
                     trailing: None,
                 }),
                 resettable_slider(ResettableSliderSpec {
-                    label: "Posição X",
+                    label: s.inspector_pos_x,
                     value_label: format!("{:.0} px", tr.pos_x),
+                    reset_tooltip: reset_tip,
                     range: -960.0_f32..=960.0_f32,
                     step: 1.0_f32,
                     current: tr.pos_x,
@@ -86,8 +93,9 @@ pub fn view<'a>(
                     trailing: None,
                 }),
                 resettable_slider(ResettableSliderSpec {
-                    label: "Posição Y",
+                    label: s.inspector_pos_y,
                     value_label: format!("{:.0} px", tr.pos_y),
+                    reset_tooltip: reset_tip,
                     range: -540.0_f32..=540.0_f32,
                     step: 1.0_f32,
                     current: tr.pos_y,
@@ -99,8 +107,9 @@ pub fn view<'a>(
                     trailing: None,
                 }),
                 resettable_slider(ResettableSliderSpec {
-                    label: "Opacidade",
+                    label: s.inspector_opacity,
                     value_label: format!("{opacity_pct:.0}%"),
+                    reset_tooltip: reset_tip,
                     range: 0.0_f32..=100.0_f32,
                     step: 1.0_f32,
                     current: opacity_pct,
@@ -113,8 +122,9 @@ pub fn view<'a>(
                     trailing: None,
                 }),
                 resettable_slider(ResettableSliderSpec {
-                    label: "Velocidade",
+                    label: s.inspector_speed,
                     value_label: format!("{:.2}x", tr.speed),
+                    reset_tooltip: reset_tip,
                     range: 0.25_f32..=4.0_f32,
                     step: 0.05_f32,
                     current: tr.speed,
@@ -133,11 +143,11 @@ pub fn view<'a>(
         }
         None => container(
             column![
-                text("Nenhum clipe selecionado")
+                text(s.inspector_none_selected)
                     .size(13)
                     .font(theme::FONT_SEMIBOLD)
                     .color(theme::TEXT_PRIMARY),
-                text("Selecione um clipe na timeline abaixo para editar Escala, Posição, Opacidade e Velocidade.")
+                text(s.inspector_none_selected_desc)
                     .size(12)
                     .color(theme::TEXT_SECONDARY)
                     .align_x(Horizontal::Center),

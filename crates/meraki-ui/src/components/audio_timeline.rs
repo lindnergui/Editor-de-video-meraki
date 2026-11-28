@@ -11,8 +11,8 @@ use iced::widget::canvas::{self, Canvas, Geometry};
 use iced::widget::{container, row, vertical_rule};
 use iced::{Element, Length, Point, Rectangle, Renderer, Theme};
 use meraki_core::{
-    Clip, ClipId, Project, Timeline, Track, TrackId, TrackKind, VolumeKeyframe, MAX_VOLUME_KF_DB,
-    MIN_VOLUME_KF_DB,
+    AppLanguage, Clip, ClipId, Project, Timeline, Track, TrackId, TrackKind, VolumeKeyframe,
+    MAX_VOLUME_KF_DB, MIN_VOLUME_KF_DB,
 };
 
 pub const COMPACT_TRACK_HEIGHT: f32 = 24.0;
@@ -140,9 +140,10 @@ pub fn view<'a>(
     playback: &'a PlaybackState,
     view_state: &'a TimelineViewState,
     selected_track_id: Option<TrackId>,
+    lang: AppLanguage,
 ) -> Element<'a, AudioTimelineMessage> {
     let rows = track_band_layout(&project.timeline);
-    let canvas_widget = Canvas::new(AudioTimelineProgram { project, playback, view_state })
+    let canvas_widget = Canvas::new(AudioTimelineProgram { project, playback, view_state, lang })
         .width(Length::Fill)
         .height(Length::Fill);
 
@@ -150,7 +151,7 @@ pub fn view<'a>(
         row![
             build_zoom_rail(),
             vertical_rule(1).style(theme::divider),
-            build_track_headers(&rows, selected_track_id),
+            build_track_headers(&rows, selected_track_id, lang),
             vertical_rule(1).style(theme::divider),
             canvas_widget,
         ]
@@ -167,6 +168,7 @@ struct AudioTimelineProgram<'a> {
     project: &'a Project,
     playback: &'a PlaybackState,
     view_state: &'a TimelineViewState,
+    lang: AppLanguage,
 }
 
 #[derive(Default)]
@@ -342,6 +344,7 @@ impl canvas::Program<AudioTimelineMessage> for AudioTimelineProgram<'_> {
                         size: bounds.size(),
                         px,
                         scroll,
+                        lang: self.lang,
                     },
                 );
             },

@@ -8,9 +8,10 @@ use crate::views::audio::{self, AudioMessage};
 use iced::Task;
 use meraki_core::{
     eq_band_index, AddClipCommand, ApplyVoicePresetCommand, AudioEffectKind, EqBand,
-    RemoveVolumeKeyframeCommand, ToggleAudioEffectCommand, TrackAudioSettings, TrackId,
-    TrackKind, UpdateTrackAudioCommand, UpsertVolumeKeyframeCommand, VoicePreset, VolumeKeyframe,
-    MAX_EQ_GAIN_DB, MAX_TRACK_GAIN_DB, MIN_EQ_GAIN_DB, MIN_TRACK_GAIN_DB,
+    RemoveVolumeKeyframeCommand, SetTrackEqCommand, SetTrackVolumeCommand,
+    ToggleAudioEffectCommand, TrackAudioSettings, TrackId, TrackKind, UpdateTrackAudioCommand,
+    UpsertVolumeKeyframeCommand, VoicePreset, VolumeKeyframe, MAX_EQ_GAIN_DB, MAX_TRACK_GAIN_DB,
+    MIN_EQ_GAIN_DB, MIN_TRACK_GAIN_DB,
 };
 use meraki_engine::EngineCommand;
 
@@ -44,8 +45,7 @@ impl MerakiApp {
     pub fn toggle_audio_effect(&mut self, track_id: TrackId, effect: AudioEffectKind) -> Result<(), String> {
         self.execute_audio_command(Box::new(ToggleAudioEffectCommand::new(track_id, effect)))?;
         if let Some(track) = self.project.timeline.track(track_id) {
-            let enabled = track.audio.has_effect(effect);
-            self.send_engine_command(EngineCommand::ToggleTrackAudioEffect { track_id, effect, enabled });
+            self.send_live_enhancements(track_id, (&track.audio).into());
         }
         Ok(())
     }
@@ -68,6 +68,11 @@ impl MerakiApp {
                                 self.playback.selected_clip_id = Some(clip_id);
                             }
                         }
+                    }
+                }
+                AudioLibraryMessage::ApplyAudioPreset(preset) => {
+                    if let Some(tid) = self.active_audio_track_id() {
+                        let _ = self.apply_audio_preset(tid, preset);
                     }
                 }
                 AudioLibraryMessage::ApplyVoicePreset(preset) => {
@@ -107,32 +112,29 @@ impl MerakiApp {
         match msg {
             EqMessage::BandDragged { band, gain_db } => {
                 self.preview_eq_band(track_id, band, gain_db);
-                self.send_engine_command(EngineCommand::UpdateEqBand { track_id, band, gain_db });
+                self.send_live_eq(track_id);
             }
             EqMessage::BandReleased { band, gain_db } => {
                 let clamped = gain_db.clamp(MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB);
                 self.commit_eq_drag(track_id, band, clamped);
-                self.send_engine_command(EngineCommand::UpdateEqBand { track_id, band, gain_db: clamped });
+                self.send_live_eq(track_id);
             }
+            EqMessage::BandReset(band) => self.handle_eq_band_reset(track_id, band),
+            EqMessage::AutoAdjust(target) => self.handle_auto_eq(track_id, target),
             EqMessage::ResetEq => {
-                if let Some(track) = self.project.timeline.track(track_id) {
-                    let mut next = track.audio.clone();
-                    next.eq_gains_db = [0.0; 4];
-                    next.voice_preset = None;
-                    if self.execute_audio_command(Box::new(UpdateTrackAudioCommand::new(track_id, next))).is_ok() {
-                        for band in [EqBand::Low, EqBand::LowMid, EqBand::Mid, EqBand::High] {
-                            self.send_engine_command(EngineCommand::UpdateEqBand { track_id, band, gain_db: 0.0 });
-                        }
-                    }
+                self.audio.eq_drag_origin = None;
+                self.audio.auto_eq_notice = None;
+                if self.execute_audio_command(Box::new(SetTrackEqCommand::new(track_id, [0.0; 4]))).is_ok() {
+                    self.send_live_eq(track_id);
                 }
             }
             EqMessage::NoiseReductionToggled(enabled) => {
                 if let Some(track) = self.project.timeline.track(track_id) {
                     let mut next = track.audio.clone();
                     next.noise_reduction_enabled = enabled;
-                    let strength = next.noise_reduction_strength;
+                    let enhancements = (&next).into();
                     if self.execute_audio_command(Box::new(UpdateTrackAudioCommand::new(track_id, next))).is_ok() {
-                        self.send_engine_command(EngineCommand::SetNoiseReduction { track_id, enabled, strength });
+                        self.send_live_enhancements(track_id, enhancements);
                     }
                 }
             }
@@ -143,8 +145,8 @@ impl MerakiApp {
                         self.audio.nr_drag_origin = Some((track_id, track.audio.clone()));
                     }
                     track.audio.noise_reduction_strength = clamped;
-                    let enabled = track.audio.noise_reduction_enabled;
-                    self.send_engine_command(EngineCommand::SetNoiseReduction { track_id, enabled, strength: clamped });
+                    let enhancements = (&track.audio).into();
+                    self.send_live_enhancements(track_id, enhancements);
                 }
             }
             EqMessage::NoiseReductionStrengthReleased => {
@@ -159,8 +161,9 @@ impl MerakiApp {
                 if let Some(track) = self.project.timeline.track(track_id) {
                     let mut next = track.audio.clone();
                     next.voice_leveler_enabled = enabled;
+                    let enhancements = (&next).into();
                     if self.execute_audio_command(Box::new(UpdateTrackAudioCommand::new(track_id, next))).is_ok() {
-                        self.send_engine_command(EngineCommand::SetVoiceLeveler { track_id, enabled });
+                        self.send_live_enhancements(track_id, enhancements);
                     }
                 }
             }
@@ -174,9 +177,8 @@ impl MerakiApp {
                 if let Some(track) = self.project.timeline.track(track_id) {
                     let mut next = track.audio.clone();
                     next.muted = !next.muted;
-                    let muted = next.muted;
                     if self.execute_audio_command(Box::new(UpdateTrackAudioCommand::new(track_id, next))).is_ok() {
-                        self.send_engine_command(EngineCommand::SetTrackMute { track_id, muted });
+                        self.send_live_volume(track_id);
                     }
                 }
             }
@@ -198,20 +200,25 @@ impl MerakiApp {
                     }
                     track.audio.gain_db = clamped;
                     track.gain_db = clamped;
-                    self.send_engine_command(EngineCommand::SetTrackGain { track_id, gain_db: clamped });
+                    self.send_live_volume(track_id);
                 }
             }
             MixerMessage::TrackGainReleased(track_id) => {
                 if let Some((orig_tid, orig)) = self.audio.gain_drag_origin.take() {
-                    if let Some(final_s) = self.project.timeline.track(orig_tid).map(|t| t.audio.clone()) {
+                    if let Some(final_db) = self.project.timeline.track(orig_tid).map(|t| t.audio.gain_db) {
+                        let changed = (orig.gain_db - final_db).abs() > 1e-4;
                         let _ = self.project.timeline.update_track_audio(orig_tid, orig);
-                        let _ = self.execute_audio_command(Box::new(UpdateTrackAudioCommand::new(orig_tid, final_s)));
+                        if changed {
+                            let _ = self.execute_audio_command(Box::new(SetTrackVolumeCommand::new(orig_tid, final_db)));
+                        }
                     }
-                } else if let Some(track) = self.project.timeline.track(track_id) {
-                    let s = track.audio.clone();
-                    self.send_engine_command(EngineCommand::SetTrackGain { track_id, gain_db: s.gain_db });
                 }
+                self.send_live_volume(track_id);
             }
+            MixerMessage::TrackGainReset(track_id) => self.handle_track_gain_reset(track_id),
+            MixerMessage::MasterGainChanged(gain_db) => self.handle_master_gain_changed(gain_db),
+            MixerMessage::MasterGainReleased => self.handle_master_gain_released(),
+            MixerMessage::MasterGainReset => self.handle_master_gain_reset(),
             MixerMessage::MasterVolumeChanged(vol) => {
                 self.handle_playback_message(PlaybackMessage::SetMasterVolume(vol));
             }
@@ -254,26 +261,30 @@ impl MerakiApp {
             }
             track.audio.eq_gains_db[eq_band_index(band)] = gain_db.clamp(MIN_EQ_GAIN_DB, MAX_EQ_GAIN_DB);
             track.audio.voice_preset = None;
+            track.audio.audio_preset = None;
         }
     }
 
     fn commit_eq_drag(&mut self, track_id: TrackId, band: EqBand, gain_db: f32) {
         if let Some((orig_tid, orig)) = self.audio.eq_drag_origin.take() {
-            if let Some(mut final_s) = self.project.timeline.track(orig_tid).map(|t| t.audio.clone()) {
-                final_s.eq_gains_db[eq_band_index(band)] = gain_db;
-                final_s.voice_preset = None;
+            if let Some(mut gains) = self.project.timeline.track(orig_tid).map(|t| t.audio.eq_gains_db) {
+                gains[eq_band_index(band)] = gain_db;
+                let changed = orig.eq_gains_db != gains;
                 let _ = self.project.timeline.update_track_audio(orig_tid, orig);
-                let _ = self.execute_audio_command(Box::new(UpdateTrackAudioCommand::new(orig_tid, final_s)));
+                if changed {
+                    let _ = self.execute_audio_command(Box::new(SetTrackEqCommand::new(orig_tid, gains)));
+                }
             }
         } else if let Some(track) = self.project.timeline.track(track_id) {
-            let mut next = track.audio.clone();
-            next.eq_gains_db[eq_band_index(band)] = gain_db;
-            next.voice_preset = None;
-            let _ = self.execute_audio_command(Box::new(UpdateTrackAudioCommand::new(track_id, next)));
+            let mut gains = track.audio.eq_gains_db;
+            gains[eq_band_index(band)] = gain_db;
+            if gains != track.audio.eq_gains_db {
+                let _ = self.execute_audio_command(Box::new(SetTrackEqCommand::new(track_id, gains)));
+            }
         }
     }
 
-    fn execute_audio_command(&mut self, cmd: Box<dyn meraki_core::Command>) -> Result<(), String> {
+    pub(crate) fn execute_audio_command(&mut self, cmd: Box<dyn meraki_core::Command>) -> Result<(), String> {
         if let Err(err) = self.history.execute(cmd, &mut self.project) {
             let msg = err.to_string();
             self.last_error = Some(msg.clone());
@@ -283,26 +294,40 @@ impl MerakiApp {
         Ok(())
     }
 
-    fn send_live_eq_and_voice(&mut self, track_id: TrackId, settings: &TrackAudioSettings) {
-        for band in [EqBand::Low, EqBand::LowMid, EqBand::Mid, EqBand::High] {
-            self.send_engine_command(EngineCommand::UpdateEqBand {
-                track_id,
-                band,
-                gain_db: settings.eq_gains_db[eq_band_index(band)],
-            });
-        }
-        self.send_engine_command(EngineCommand::SetNoiseReduction {
-            track_id,
-            enabled: settings.noise_reduction_enabled,
-            strength: settings.noise_reduction_strength,
-        });
-        self.send_engine_command(EngineCommand::SetVoiceLeveler {
-            track_id,
-            enabled: settings.voice_leveler_enabled,
+    pub(crate) fn send_live_eq_and_voice(&mut self, track_id: TrackId, settings: &TrackAudioSettings) {
+        self.send_engine_command(EngineCommand::UpdateAudioLive {
+            track_volumes: None, master_volume_db: None, master_muted: None,
+            track_eq: Some((track_id, settings.eq_gains_db.map(f64::from))),
+            track_enhancements: Some((track_id, settings.into())),
         });
     }
 
-    fn send_engine_command(&mut self, cmd: EngineCommand) {
+    pub(crate) fn send_live_eq(&mut self, track_id: TrackId) {
+        if let Some(track) = self.project.timeline.track(track_id) {
+            self.send_engine_command(EngineCommand::UpdateAudioLive {
+                track_volumes: None, master_volume_db: None, master_muted: None,
+                track_eq: Some((track_id, track.audio.eq_gains_db.map(f64::from))), track_enhancements: None,
+            });
+        }
+    }
+
+    pub(crate) fn send_live_volume(&mut self, track_id: TrackId) {
+        if let Some(track) = self.project.timeline.track(track_id) {
+            self.send_engine_command(EngineCommand::UpdateAudioLive {
+                track_volumes: Some((track_id, f64::from(track.audio.gain_db), track.audio.muted)),
+                master_volume_db: None, master_muted: None, track_eq: None, track_enhancements: None,
+            });
+        }
+    }
+
+    pub(crate) fn send_live_enhancements(&mut self, track_id: TrackId, enhancements: meraki_engine::AudioEnhancements) {
+        self.send_engine_command(EngineCommand::UpdateAudioLive {
+            track_volumes: None, master_volume_db: None, master_muted: None,
+            track_eq: None, track_enhancements: Some((track_id, enhancements)),
+        });
+    }
+
+    pub(crate) fn send_engine_command(&mut self, cmd: EngineCommand) {
         if let Err(err) = self.engine.send(cmd) {
             self.last_error = Some(err.to_string());
         }

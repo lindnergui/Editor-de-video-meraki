@@ -1,18 +1,20 @@
 use crate::audio_dsp_chain::{
-    apply_echo, apply_eq_band_on_proxy, apply_noise_reduction, apply_reverb, apply_settings_to_clip,
+    apply_echo, apply_noise_reduction, apply_reverb, apply_settings_to_clip,
     apply_voice_leveler, attach_clip_audio_chain, effective_muted, resolve_clip_dsp, ClipAudioDsp,
 };
 use crate::audio_meter::AudioMeterAggregator;
 use crate::pipeline::PipelineError;
 use crate::protocol::{TimelineRenderClip, TrackAudioMix};
 use gstreamer as gst;
-use gstreamer::prelude::*;
 use gstreamer_editing_services as ges;
 use meraki_core::{
     db_to_linear, eq_band_index, AudioEffectKind, EqBand, TrackAudioSettings, TrackId,
     MAX_EQ_GAIN_DB, MAX_TRACK_GAIN_DB, MIN_EQ_GAIN_DB, MIN_TRACK_GAIN_DB,
 };
 use std::collections::HashMap;
+
+mod live;
+pub(crate) use live::checked_db;
 
 /// Controlador de cadeia DSP de áudio por trilha com atualização ao vivo sem reconstruir o GES.
 pub(crate) struct AudioDspController {
@@ -97,7 +99,7 @@ impl AudioDspController {
         if let Some(clips) = self.live_handles.get(&track_id) {
             for clip in clips {
                 if let Some(ref vol) = clip.volume {
-                    vol.set_property("volume", linear);
+                    vol.set_gain(linear);
                 }
             }
         }
@@ -112,7 +114,7 @@ impl AudioDspController {
             let eff_mute = effective_muted(settings, any_solo);
             for clip in clips {
                 if let Some(ref vol) = clip.volume {
-                    vol.set_property("mute", eff_mute);
+                    vol.set_mute(eff_mute);
                 }
             }
         }
@@ -128,7 +130,7 @@ impl AudioDspController {
                 let eff_mute = effective_muted(settings, any_solo);
                 for clip in clips {
                     if let Some(ref vol) = clip.volume {
-                        vol.set_property("mute", eff_mute);
+                        vol.set_mute(eff_mute);
                     }
                 }
             }
@@ -152,9 +154,7 @@ impl AudioDspController {
         if let Some(clips) = self.live_handles.get(&track_id) {
             for clip in clips {
                 if let Some(ref eq) = clip.eq {
-                    if let Ok(proxy) = eq.clone().dynamic_cast::<gst::ChildProxy>() {
-                        apply_eq_band_on_proxy(&proxy, idx, clamped);
-                    }
+                    eq.set_gain(idx, clamped);
                 }
             }
         }
@@ -237,6 +237,7 @@ impl AudioDspController {
 mod tests {
     use super::*;
     use crate::discoverer::tests::{write_test_wav_1s_stereo_48khz, TempFileGuard};
+    use gstreamer::prelude::*;
     use gstreamer_editing_services::prelude::*;
     use meraki_core::{ClipId, ClipTransform, TrackKind, VolumeKeyframe};
 
@@ -275,6 +276,7 @@ mod tests {
             clip_id: ClipId::new(),
             track_id: track_a,
             path: wav.0.clone(),
+            proxy_path: None,
             track_kind: TrackKind::Audio,
             timeline_start_ns: 0,
             source_in_ns: 0,
@@ -309,20 +311,19 @@ mod tests {
         dsp.finalize_after_commit();
 
         assert_eq!(dsp.live_handles[&track_a].len(), 1);
-        let eq_elem = dsp.live_handles[&track_a][0].eq.clone().unwrap();
+        let eq = dsp.live_handles[&track_a][0].eq.clone().unwrap();
         assert!(dsp.live_handles[&track_a][0].volume.is_some());
 
         dsp.update_eq_band(track_a, EqBand::Low, 5.5).unwrap();
         dsp.update_eq_band(track_a, EqBand::High, -4.0).unwrap();
-        let eq_proxy = eq_elem.dynamic_cast::<gst::ChildProxy>().unwrap();
-        assert!((eq_proxy.child_by_index(0).unwrap().property::<f64>("gain") - 5.5).abs() < 1e-4);
-        assert!((eq_proxy.child_by_index(3).unwrap().property::<f64>("gain") - (-4.0)).abs() < 1e-4);
+        assert!((eq.bands[0].property::<f64>("gain") - 5.5).abs() < 1e-4);
+        assert!((eq.bands[3].property::<f64>("gain") - (-4.0)).abs() < 1e-4);
 
         dsp.set_track_solo(track_a, true).unwrap();
-        assert!(!dsp.live_handles[&track_a][0].volume.as_ref().unwrap().property::<bool>("mute"));
-        assert!(dsp.live_handles[&track_b][0].volume.as_ref().unwrap().property::<bool>("mute"));
+        assert!(!dsp.live_handles[&track_a][0].volume.as_ref().unwrap().element.property::<bool>("mute"));
+        assert!(dsp.live_handles[&track_b][0].volume.as_ref().unwrap().element.property::<bool>("mute"));
 
         dsp.set_track_solo(track_a, false).unwrap();
-        assert!(!dsp.live_handles[&track_b][0].volume.as_ref().unwrap().property::<bool>("mute"));
+        assert!(!dsp.live_handles[&track_b][0].volume.as_ref().unwrap().element.property::<bool>("mute"));
     }
 }

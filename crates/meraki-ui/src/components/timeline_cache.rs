@@ -6,6 +6,7 @@ use meraki_core::{ClipId, Project};
 use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use uuid::Uuid;
 
 /// Cache estático para régua, clipes, ondas e keyframes, combinado com desenho direto
 /// leve da agulha (`playhead_ns`) para evitar re-tesselar a timeline a cada tick a 30 Hz.
@@ -36,20 +37,30 @@ impl DualCanvasCache {
 }
 
 /// Gera chave de cache do conteúdo estático da timeline principal (exclui `playhead_ns`).
+#[allow(clippy::too_many_arguments)]
 pub fn hash_timeline_static(
     project: &Project,
     overlay_first: bool,
     selected_clip_id: Option<ClipId>,
+    selected_transition_id: Option<Uuid>,
     px_per_sec: f32,
     scroll_x_px: f32,
     drag_preview: Option<(ClipId, u64, u64)>,
+    trim_limit: Option<(ClipId, bool, bool)>,
 ) -> u64 {
     let mut h = DefaultHasher::new();
     overlay_first.hash(&mut h);
     selected_clip_id.hash(&mut h);
+    selected_transition_id.hash(&mut h);
     px_per_sec.to_bits().hash(&mut h);
     scroll_x_px.to_bits().hash(&mut h);
     drag_preview.hash(&mut h);
+    trim_limit.hash(&mut h);
+
+    project.timeline.transitions.len().hash(&mut h);
+    for tr in &project.timeline.transitions {
+        tr.hash(&mut h);
+    }
 
     for track in display_tracks_ordered(&project.timeline, overlay_first) {
         track.id.hash(&mut h);
@@ -146,19 +157,19 @@ mod tests {
             .add_clip(a1, Clip::new(asset_id, 0, 0, 3_000_000_000))
             .expect("add a1");
 
-        let h_main_0 = hash_timeline_static(&project, false, Some(c1), 25.0, 0.0, None);
+        let h_main_0 = hash_timeline_static(&project, false, Some(c1), None, 25.0, 0.0, None, None);
         let h_audio_0 = hash_audio_timeline_static(&project, Some(c1), 25.0, 0.0, None);
 
         // Alterar apenas o playhead não invalida o cache estático
         project.timeline.playhead_ns = 1_750_000_000;
-        assert_eq!(hash_timeline_static(&project, false, Some(c1), 25.0, 0.0, None), h_main_0);
+        assert_eq!(hash_timeline_static(&project, false, Some(c1), None, 25.0, 0.0, None, None), h_main_0);
         assert_eq!(hash_audio_timeline_static(&project, Some(c1), 25.0, 0.0, None), h_audio_0);
 
         // Alterar zoom, seleção, preview de arraste ou volume keyframe invalida corretamente
-        assert_ne!(hash_timeline_static(&project, false, Some(c1), 50.0, 0.0, None), h_main_0);
-        assert_ne!(hash_timeline_static(&project, false, None, 25.0, 0.0, None), h_main_0);
+        assert_ne!(hash_timeline_static(&project, false, Some(c1), None, 50.0, 0.0, None, None), h_main_0);
+        assert_ne!(hash_timeline_static(&project, false, None, None, 25.0, 0.0, None, None), h_main_0);
         assert_ne!(
-            hash_timeline_static(&project, false, Some(c1), 25.0, 0.0, Some((c1, 500, 3_000_000_000))),
+            hash_timeline_static(&project, false, Some(c1), None, 25.0, 0.0, Some((c1, 500, 3_000_000_000)), None),
             h_main_0
         );
         assert_ne!(hash_audio_timeline_static(&project, Some(c1), 25.0, 12.0, None), h_audio_0);

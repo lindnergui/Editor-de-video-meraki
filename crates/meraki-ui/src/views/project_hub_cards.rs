@@ -1,6 +1,7 @@
 use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::views::project_hub::{
-    format_short_path, format_unix_timestamp, ProjectHubMessage, ProjectHubState,
+    format_unix_timestamp_localized, ProjectHubMessage, ProjectHubState,
 };
 use crate::{icons, theme};
 use iced::alignment::{Horizontal, Vertical};
@@ -9,7 +10,7 @@ use iced::widget::{
     button, column, container, horizontal_space, row, text, text_input, vertical_space,
 };
 use iced::{Background, Border, Element, Length};
-use meraki_core::RecentProjectEntry;
+use meraki_core::{AppLanguage, RecentProjectEntry};
 
 pub const GRID_COLUMNS: usize = 3;
 pub const CARD_SIZE: f32 = 260.0;
@@ -81,7 +82,8 @@ fn accent_circle_badge_style(_theme: &iced::Theme) -> container::Style {
 }
 
 /// Card quadrado 260x260 inicial da grade para criação direta de um novo projeto.
-pub fn new_project_square_card<'a>() -> Element<'a, ProjectHubMessage> {
+pub fn new_project_square_card<'a>(lang: AppLanguage) -> Element<'a, ProjectHubMessage> {
+    let s = i18n::strings(lang);
     let plus_badge = container(icons::icon(icons::PLUS, 22.0, theme::TEXT_ON_ACCENT))
         .width(Length::Fixed(48.0))
         .height(Length::Fixed(48.0))
@@ -92,11 +94,11 @@ pub fn new_project_square_card<'a>() -> Element<'a, ProjectHubMessage> {
     let inner = container(
         column![
             plus_badge,
-            text("Novo Projeto")
+            text(s.hub_new_project)
                 .size(15)
                 .font(theme::FONT_SEMIBOLD)
                 .color(theme::TEXT_PRIMARY),
-            text("Criar edição do zero")
+            text(s.hub_new_project_sub)
                 .size(12)
                 .color(theme::TEXT_SECONDARY)
                 .align_x(Horizontal::Center),
@@ -122,7 +124,9 @@ pub fn new_project_square_card<'a>() -> Element<'a, ProjectHubMessage> {
 pub fn project_square_card<'a>(
     entry: &'a RecentProjectEntry,
     state: &'a ProjectHubState,
+    lang: AppLanguage,
 ) -> Element<'a, ProjectHubMessage> {
+    let s = i18n::strings(lang);
     let is_renaming = state.renaming_path.as_ref() == Some(&entry.path);
     let exists = entry.path.is_file();
 
@@ -139,7 +143,7 @@ pub fn project_square_card<'a>(
                 icons::icon(icons::TAB_EDIT, 24.0, theme::TEXT_SECONDARY),
                 row![
                     icons::icon(icons::ALERT_CIRCLE, 12.0, theme::WARNING),
-                    text("Ausente").size(11).color(theme::WARNING),
+                    text(s.hub_missing_badge).size(11).color(theme::WARNING),
                 ]
                 .spacing(4)
                 .align_y(Vertical::Center),
@@ -163,13 +167,19 @@ pub fn project_square_card<'a>(
 
     let title_area: Element<'a, ProjectHubMessage> = if is_renaming {
         row![
-            text_input("Nome...", &state.rename_draft)
+            text_input(s.hub_rename_placeholder, &state.rename_draft)
                 .on_input(ProjectHubMessage::RenameDraftChanged)
                 .on_submit(ProjectHubMessage::CommitRename)
                 .size(12)
                 .padding([4, 6])
                 .style(theme::text_input_style),
-            button(text("OK").size(11).font(theme::FONT_SEMIBOLD).color(theme::TEXT_ON_ACCENT))
+            button(
+                text(s.ok)
+                    .size(11)
+                    .font(theme::FONT_SEMIBOLD)
+                    .color(theme::TEXT_ON_ACCENT)
+                    .wrapping(text::Wrapping::None),
+            )
                 .padding([4, 8])
                 .style(theme::primary_button)
                 .on_press(ProjectHubMessage::CommitRename),
@@ -189,22 +199,22 @@ pub fn project_square_card<'a>(
             .into()
     };
 
-    let metadata = column![
-        text(format_unix_timestamp(entry.last_opened_unix_secs))
-            .size(11)
-            .color(theme::TEXT_SECONDARY),
-        text(format_short_path(&entry.path))
-            .size(11)
-            .color(theme::TEXT_SECONDARY),
-    ]
-    .spacing(2);
+    let metadata = text(format_unix_timestamp_localized(entry.last_opened_unix_secs, lang))
+        .size(11)
+        .color(theme::TEXT_SECONDARY);
 
     let open_btn = icon_tooltip(
-        button(text("Abrir").size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_ON_ACCENT))
+        button(
+            text(s.open)
+                .size(12)
+                .font(theme::FONT_SEMIBOLD)
+                .color(theme::TEXT_ON_ACCENT)
+                .wrapping(text::Wrapping::None),
+        )
             .padding([5, 11])
             .style(theme::primary_button)
             .on_press(ProjectHubMessage::OpenRecent(entry.path.clone())),
-        "Abrir projeto no editor",
+        s.hub_open_tip,
         Position::Top,
     );
 
@@ -216,7 +226,7 @@ pub fn project_square_card<'a>(
                 path: entry.path.clone(),
                 current_name: entry.name.clone(),
             }),
-        "Renomear projeto",
+        s.rename,
         Position::Top,
     );
 
@@ -224,8 +234,8 @@ pub fn project_square_card<'a>(
         button(icons::icon(icons::TRASH, 12.0, theme::TEXT_SECONDARY))
             .padding([5, 7])
             .style(theme::secondary_button)
-            .on_press(ProjectHubMessage::RemoveRecent(entry.path.clone())),
-        "Remover da lista de recentes",
+            .on_press(ProjectHubMessage::RequestDeleteProject(entry.path.clone())),
+        s.hub_delete_tip,
         Position::Top,
     );
 

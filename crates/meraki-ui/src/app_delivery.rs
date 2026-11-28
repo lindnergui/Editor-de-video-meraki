@@ -3,7 +3,7 @@ use crate::playback;
 use iced::Task;
 use meraki_core::{
     ExportFormat, ExportFrameRate, ExportJob, ExportJobId, ExportJobStatus, ExportPreset,
-    ExportQuality, ExportResolution, ExportSettings, PreviewQuality,
+    ExportQuality, ExportResolution, ExportSettings,
 };
 use meraki_engine::{EngineCommand, EngineEvent};
 use std::path::PathBuf;
@@ -290,9 +290,10 @@ impl MerakiApp {
         };
         self.delivery.active_job_id = Some(job_id);
 
-        let clips = playback::build_render_clips(&self.project, PreviewQuality::Full1080p);
+        let clips = playback::build_render_clips(&self.project);
         let audio_tracks = playback::build_audio_mix(&self.project);
         if let Err(err) = self.engine.send(EngineCommand::StartExport {
+            transitions: self.project.timeline.transitions.clone(),
             job_id,
             settings,
             clips,

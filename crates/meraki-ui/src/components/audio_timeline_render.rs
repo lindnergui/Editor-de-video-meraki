@@ -2,14 +2,15 @@ use crate::components::audio_timeline::{
     track_band_layout, volume_db_to_y, AudioTimelineMessage, AudioTrackRow, DraggingVolumeKf,
 };
 use crate::components::timeline_math::{time_ns_to_x, CLIP_RADIUS, RULER_HEIGHT};
-use crate::components::timeline_render::draw_ruler;
+use crate::components::timeline_render::{draw_ruler, truncate_clip_title};
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::{Horizontal, Vertical};
 use iced::border;
 use iced::widget::canvas::{Frame, Path, Stroke, Text};
 use iced::widget::{button, column, container, horizontal_rule, row, text, Column};
-use iced::{Color, Element, Length, Pixels, Point, Size};
-use meraki_core::{Clip, ClipId, Project, TrackId, TrackKind};
+use iced::{Color, Element, Length, Pixels, Point, Rectangle, Size};
+use meraki_core::{AppLanguage, Clip, ClipId, Project, TrackId, TrackKind};
 
 pub(crate) fn build_zoom_rail<'a>() -> Element<'a, AudioTimelineMessage> {
     container(
@@ -36,10 +37,17 @@ pub(crate) fn build_zoom_rail<'a>() -> Element<'a, AudioTimelineMessage> {
 pub(crate) fn build_track_headers<'a>(
     rows: &[AudioTrackRow<'a>],
     selected_track_id: Option<TrackId>,
+    lang: AppLanguage,
 ) -> Element<'a, AudioTimelineMessage> {
     let mut headers = Column::new().width(Length::Fill);
     headers = headers.push(
-        container(text("TRILHAS").size(10).font(theme::FONT_BOLD).color(theme::TEXT_SECONDARY))
+        container(
+            text(i18n::strings(lang).timeline_tracks_header)
+                .size(10)
+                .font(theme::FONT_BOLD)
+                .color(theme::TEXT_SECONDARY)
+                .wrapping(text::Wrapping::None),
+        )
             .width(Length::Fill)
             .height(RULER_HEIGHT + 4.0)
             .center_x(Length::Fill)
@@ -113,6 +121,7 @@ pub(crate) struct StaticAudioSpec<'a> {
     pub size: Size,
     pub px: f32,
     pub scroll: f32,
+    pub lang: AppLanguage,
 }
 
 pub(crate) fn draw_static_audio(frame: &mut Frame, spec: StaticAudioSpec<'_>) {
@@ -192,6 +201,7 @@ fn draw_tracks_and_clips(frame: &mut Frame, rows: &[AudioTrackRow<'_>], spec: &S
                     clip_h,
                     px,
                     scroll,
+                    spec.lang,
                 );
             }
         }
@@ -210,6 +220,7 @@ fn draw_audio_clip_overlay(
     clip_h: f32,
     px: f32,
     scroll: f32,
+    lang: AppLanguage,
 ) {
     let mut x = left_x + 6.0;
     let mut i = 0_usize;
@@ -264,14 +275,20 @@ fn draw_audio_clip_overlay(
         frame.stroke(&dot, Stroke::default().with_color(theme::ACCENT).with_width(1.8));
     }
 
-    if right_x - left_x > 46.0 {
-        let label = project.asset(clip.asset_id).map_or("Áudio", |a| a.name.as_str());
-        frame.fill_text(Text {
-            content: label.to_string(),
-            position: Point::new(left_x + 8.0, clip_top + 4.0),
-            color: theme::TEXT_PRIMARY,
-            size: Pixels(10.0),
-            ..Text::default()
+    let inner_w = (right_x - left_x - 16.0).max(0.0);
+    let fallback = i18n::strings(lang).files_filter_audios;
+    let raw_label = project.asset(clip.asset_id).map_or(fallback, |a| a.name.as_str());
+    let truncated = truncate_clip_title(raw_label, (right_x - left_x - 20.0).max(0.0));
+    if !truncated.is_empty() && inner_w > 4.0 {
+        let region = Rectangle { x: left_x + 8.0, y: clip_top, width: inner_w, height: clip_h };
+        frame.with_clip(region, |clipped| {
+            clipped.fill_text(Text {
+                content: truncated,
+                position: Point::new(2.0, 4.0),
+                color: theme::TEXT_PRIMARY,
+                size: Pixels(10.0),
+                ..Text::default()
+            });
         });
     }
 }

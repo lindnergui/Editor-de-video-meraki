@@ -1,3 +1,4 @@
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::Vertical;
 use iced::widget::{
@@ -6,8 +7,18 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 use meraki_core::{
-    Clip, EffectParameters, TitleStyle, TransitionEffectKind, TransitionKind, VideoEffectKind,
+    AppLanguage, Clip, EffectParameters, TimelineTransition, TitleStyle, TransitionEffectKind,
+    TransitionKind, TransitionPlacement, VideoEffectKind,
 };
+
+/// Posicionamento alvo selecionado antes/durante a aplicação de uma transição posicional.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransitionPlacementMode {
+    #[default]
+    BetweenClips,
+    ClipStart,
+    ClipEnd,
+}
 
 /// Seções expansíveis da biblioteca de efeitos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +32,7 @@ pub enum LibrarySection {
 #[derive(Debug, Clone)]
 pub struct EffectsLibraryState {
     pub search_query: String,
+    pub transition_placement: TransitionPlacementMode,
     pub transitions_expanded: bool,
     pub titles_expanded: bool,
     pub video_effects_expanded: bool,
@@ -30,6 +42,7 @@ impl Default for EffectsLibraryState {
     fn default() -> Self {
         Self {
             search_query: String::new(),
+            transition_placement: TransitionPlacementMode::BetweenClips,
             transitions_expanded: true,
             titles_expanded: true,
             video_effects_expanded: true,
@@ -42,30 +55,32 @@ impl Default for EffectsLibraryState {
 pub enum EffectsLibraryMessage {
     SearchChanged(String),
     ToggleSection(LibrarySection),
+    SetTransitionPlacement(TransitionPlacementMode),
+    ApplyPositionalTransition(TransitionKind),
     ApplyTransition(TransitionEffectKind),
     ToggleTransition(TransitionKind),
     AddTitle(TitleStyle),
     ToggleVideoEffect(VideoEffectKind),
 }
 
-const TRANSITIONS: [(TransitionEffectKind, TransitionKind, &str, &str, &str); 3] = [
-    (TransitionEffectKind::Fade, TransitionKind::Fade, "Fade", "Dissolver entrada e saída", "fade dissolver transicao"),
-    (TransitionEffectKind::ZoomTransition, TransitionKind::Zoom, "Zoom", "Aproximação dinâmica", "zoom escala transicao"),
-    (TransitionEffectKind::BlurTransition, TransitionKind::Blur, "Desfoque", "Transição com desfoque", "desfoque blur transicao"),
+const TRANSITIONS: [(TransitionEffectKind, TransitionKind, &str); 3] = [
+    (TransitionEffectKind::Fade, TransitionKind::Fade, "fade dissolver dissolve transicao transition"),
+    (TransitionEffectKind::ZoomTransition, TransitionKind::Zoom, "zoom escala scale transicao transition"),
+    (TransitionEffectKind::BlurTransition, TransitionKind::Blur, "desfoque blur transicao transition"),
 ];
 
-const TITLES: [(TitleStyle, &str, &str, &str); 3] = [
-    (TitleStyle::ModernText, "Texto Moderno", "Título limpo centralizado", "texto moderno titulo"),
-    (TitleStyle::QuickCaption, "Legenda Rápida", "Rodapé de fácil leitura", "legenda rapida rodape"),
-    (TitleStyle::Title3D, "Título 3D", "Destaque em negrito 3D", "titulo 3d destaque"),
+const TITLES: [(TitleStyle, &str); 3] = [
+    (TitleStyle::ModernText, "texto moderno modern title titulo"),
+    (TitleStyle::QuickCaption, "legenda rapida quick caption rodape"),
+    (TitleStyle::Title3D, "titulo 3d title headline destaque"),
 ];
 
-const VIDEO_EFFECTS: [(VideoEffectKind, &str, &str, &str); 5] = [
-    (VideoEffectKind::Zoom, "Zoom", "Aproximação ou afastamento suave", "zoom escala aproximacao ken burns efeito"),
-    (VideoEffectKind::FilmStyle, "Estilo Filme", "Paleta retrô de película", "estilo filme vintage retro"),
-    (VideoEffectKind::Cinematic, "Cinemático", "Contraste dramático de cinema", "cinematico cinema contraste"),
-    (VideoEffectKind::Glitch, "Glitch", "Distúrbio digital estilizado", "glitch erro digital efeito"),
-    (VideoEffectKind::Blur, "Desfoque", "Desfoque gaussiano ajustável", "desfoque blur suave efeito"),
+const VIDEO_EFFECTS: [(VideoEffectKind, &str); 5] = [
+    (VideoEffectKind::Zoom, "zoom escala scale aproximacao ken burns efeito effect"),
+    (VideoEffectKind::FilmStyle, "estilo filme film look vintage retro"),
+    (VideoEffectKind::Cinematic, "cinematico cinema cinematic contraste"),
+    (VideoEffectKind::Glitch, "glitch erro digital efeito effect"),
+    (VideoEffectKind::Blur, "desfoque blur suave gaussian efeito effect"),
 ];
 
 /// Verifica se um item da biblioteca corresponde ao termo buscado (sem distinção de maiúsculas/acentos).
@@ -98,15 +113,19 @@ fn fold_ascii(input: &str) -> String {
 pub fn view<'a>(
     state: &'a EffectsLibraryState,
     selected_clip: Option<&'a Clip>,
+    selected_transition: Option<&'a TimelineTransition>,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsLibraryMessage> {
-    let header = text("BIBLIOTECA DE EFEITOS")
+    let s = i18n::strings(lang);
+    let header = text(s.effects_library_title)
         .size(11)
         .font(theme::FONT_BOLD)
-        .color(theme::TEXT_SECONDARY);
+        .color(theme::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None);
 
     let search = row![
         icons::icon(icons::SEARCH, 13.0, theme::TEXT_SECONDARY),
-        text_input("Buscar efeitos...", &state.search_query)
+        text_input(s.effects_search_placeholder, &state.search_query)
             .on_input(EffectsLibraryMessage::SearchChanged)
             .size(12)
             .padding([5, 8])
@@ -118,38 +137,55 @@ pub fn view<'a>(
     let mut content = Column::new().spacing(10).width(Length::Fill);
 
     content = content.push(section_header(
-        "Transições",
+        s.effects_section_transitions,
         state.transitions_expanded,
         LibrarySection::Transitions,
     ));
     if state.transitions_expanded {
-        for (effect_kind, legacy_kind, label, desc, kw) in TRANSITIONS {
+        let active_mode = selected_transition.map_or(state.transition_placement, |tr| match tr.placement {
+            TransitionPlacement::BetweenClips { .. } => TransitionPlacementMode::BetweenClips,
+            TransitionPlacement::ClipStart { .. } => TransitionPlacementMode::ClipStart,
+            TransitionPlacement::ClipEnd { .. } => TransitionPlacementMode::ClipEnd,
+        });
+        let placement_bar = row![
+            placement_pill(s.transition_place_between, TransitionPlacementMode::BetweenClips, active_mode),
+            placement_pill(s.transition_place_start, TransitionPlacementMode::ClipStart, active_mode),
+            placement_pill(s.transition_place_end, TransitionPlacementMode::ClipEnd, active_mode),
+        ]
+        .spacing(4)
+        .width(Length::Fill);
+        content = content.push(placement_bar);
+
+        for (effect_kind, legacy_kind, kw) in TRANSITIONS {
+            let (label, desc) = i18n::transition_effect_info(lang, effect_kind);
             if matches_query(&state.search_query, label, kw) {
-                let active = selected_clip.is_some_and(|c| {
-                    c.transition_in.is_some_and(|tr| tr.kind == legacy_kind)
-                        || c.effects.iter().any(|ef| {
-                            ef.enabled
-                                && matches!(ef.params, EffectParameters::Transition(p) if p.kind == effect_kind)
-                        })
-                });
+                let active = selected_transition.is_some_and(|tr| tr.kind == legacy_kind)
+                    || selected_clip.is_some_and(|c| {
+                        c.transition_in.is_some_and(|tr| tr.kind == legacy_kind)
+                            || c.effects.iter().any(|ef| {
+                                ef.enabled
+                                    && matches!(ef.params, EffectParameters::Transition(p) if p.kind == effect_kind)
+                            })
+                    });
                 content = content.push(effect_card(
                     icons::TRANSITION,
                     label,
                     desc,
                     active,
-                    EffectsLibraryMessage::ApplyTransition(effect_kind),
+                    EffectsLibraryMessage::ApplyPositionalTransition(legacy_kind),
                 ));
             }
         }
     }
 
     content = content.push(section_header(
-        "Títulos & Textos",
+        s.effects_section_titles,
         state.titles_expanded,
         LibrarySection::Titles,
     ));
     if state.titles_expanded {
-        for (style, label, desc, kw) in TITLES {
+        for (style, kw) in TITLES {
+            let (label, desc) = i18n::title_style_info(lang, style);
             if matches_query(&state.search_query, label, kw) {
                 let active = selected_clip
                     .and_then(|c| c.title.as_ref())
@@ -166,12 +202,13 @@ pub fn view<'a>(
     }
 
     content = content.push(section_header(
-        "Efeitos de Vídeo",
+        s.effects_section_video,
         state.video_effects_expanded,
         LibrarySection::VideoEffects,
     ));
     if state.video_effects_expanded {
-        for (kind, label, desc, kw) in VIDEO_EFFECTS {
+        for (kind, kw) in VIDEO_EFFECTS {
+            let (label, desc) = i18n::video_effect_info(lang, kind);
             if matches_query(&state.search_query, label, kw) {
                 let active = selected_clip.is_some_and(|c| {
                     c.effects.iter().any(|ef| ef.kind == kind && ef.enabled)
@@ -224,6 +261,18 @@ fn section_header<'a>(
     .style(theme::ghost_button)
     .on_press(EffectsLibraryMessage::ToggleSection(section))
     .into()
+}
+
+fn placement_pill<'a>(
+    label: &'a str,
+    mode: TransitionPlacementMode,
+    active: TransitionPlacementMode,
+) -> Element<'a, EffectsLibraryMessage> {
+    button(text(label).size(10).font(theme::FONT_MEDIUM).wrapping(text::Wrapping::None))
+        .padding([4, 6])
+        .style(theme::filter_pill_button(mode == active))
+        .on_press(EffectsLibraryMessage::SetTransitionPlacement(mode))
+        .into()
 }
 
 fn effect_card<'a>(

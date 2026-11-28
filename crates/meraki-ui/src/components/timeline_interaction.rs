@@ -4,6 +4,7 @@ use crate::components::timeline_math::{
     display_tracks_ordered, dx_to_delta_ns, hit_test, snap_time_ns, x_to_time_ns, HitTarget,
     TimelineTool, TimelineViewState,
 };
+use crate::components::timeline_transitions::hit_test_transition;
 use iced::mouse;
 use iced::Point;
 use meraki_core::{Clip, ClipId, MediaKind, Project, Timeline, TrackId};
@@ -26,6 +27,7 @@ pub enum ActiveDrag {
     TrimmingLeft {
         clip: Clip,
         initial_x: f32,
+        min_start_ns: u64,
         preview_start_ns: u64,
         preview_source_in_ns: u64,
         preview_duration_ns: u64,
@@ -34,6 +36,7 @@ pub enum ActiveDrag {
         clip: Clip,
         initial_x: f32,
         max_source_ns: Option<u64>,
+        max_end_ns: Option<u64>,
         preview_duration_ns: u64,
     },
 }
@@ -46,13 +49,40 @@ pub struct TimelineInteraction {
     pub hide_hover_guide: bool,
 }
 
+/// Resolve a duração máxima real da mídia original combinando `asset.metadata.duration_ns` e `clip.media_duration_ns`.
+pub fn resolve_max_source_ns(project: &Project, clip: &Clip) -> Option<u64> {
+    if clip.title.is_some() {
+        return None;
+    }
+    if let Some(asset) = project.asset(clip.asset_id) {
+        if asset.kind == MediaKind::Image {
+            return None;
+        }
+        let m = asset.metadata.duration_ns.max(clip.media_duration_ns);
+        return (m > 0).then_some(m);
+    }
+    (clip.media_duration_ns > 0).then_some(clip.media_duration_ns)
+}
+
+fn neighbor_bounds(timeline: &Timeline, track_id: TrackId, clip_id: ClipId) -> (u64, Option<u64>) {
+    let Some(track) = timeline.track(track_id) else {
+        return (0, None);
+    };
+    let Some(idx) = track.clips.iter().position(|c| c.id == clip_id) else {
+        return (0, None);
+    };
+    let min_start = idx
+        .checked_sub(1)
+        .and_then(|i| track.clips.get(i))
+        .and_then(|c| c.timeline_end_ns().ok())
+        .unwrap_or(0);
+    let max_end = track.clips.get(idx + 1).map(|c| c.timeline_start_ns);
+    (min_start, max_end)
+}
+
 impl TimelineInteraction {
     pub fn visible_hover_x(&self) -> Option<f32> {
-        if self.hide_hover_guide {
-            None
-        } else {
-            self.hover_x
-        }
+        if self.hide_hover_guide { None } else { self.hover_x }
     }
 
     pub fn active_drag_span(&self, timeline: &Timeline) -> Option<(ClipId, u64, u64)> {
@@ -70,6 +100,21 @@ impl TimelineInteraction {
         }
     }
 
+    /// Indica quando o trim ativo atingiu exatamente o início (`0`) ou o fim (`media_duration_ns`) da mídia.
+    pub fn active_trim_limit(&self) -> Option<(ClipId, bool, bool)> {
+        match self.active.as_ref() {
+            Some(ActiveDrag::TrimmingLeft { clip, preview_source_in_ns, .. }) if *preview_source_in_ns == 0 => {
+                Some((clip.id, true, false))
+            }
+            Some(ActiveDrag::TrimmingRight { clip, max_source_ns: Some(max_src), preview_duration_ns, .. })
+                if clip.source_in_ns.saturating_add(*preview_duration_ns) >= *max_src =>
+            {
+                Some((clip.id, false, true))
+            }
+            _ => None,
+        }
+    }
+
     pub fn on_press(
         &mut self,
         local: Point,
@@ -81,6 +126,14 @@ impl TimelineInteraction {
         let tracks = display_tracks_ordered(&project.timeline, overlay_first);
         let px = view_state.px_per_sec;
         let scroll = view_state.scroll_x_px;
+
+        if view_state.tool == TimelineTool::Select && local.y >= crate::components::timeline_math::RULER_HEIGHT {
+            if let Some(tr_id) = hit_test_transition(local, &project.timeline, overlay_first, px, scroll) {
+                self.active = None;
+                self.hide_hover_guide = false;
+                return (true, Some(TimelineCanvasMessage::SelectTransition(Some(tr_id))));
+            }
+        }
 
         match hit_test(local, &tracks, px, scroll) {
             HitTarget::Ruler { time_ns } => {
@@ -123,33 +176,34 @@ impl TimelineInteraction {
                 });
                 (true, Some(TimelineCanvasMessage::SelectClip(Some(clip_id))))
             }
-            HitTarget::ClipLeftHandle { clip_id, .. } => {
+            HitTarget::ClipLeftHandle { track_id, clip_id } => {
                 let Some((_, clip)) = project.timeline.clip(clip_id) else {
                     return (false, None);
                 };
+                let (min_start_ns, _) = neighbor_bounds(&project.timeline, track_id, clip_id);
                 self.hide_hover_guide = true;
                 self.active = Some(ActiveDrag::TrimmingLeft {
                     clip: clip.clone(),
                     initial_x: local.x,
+                    min_start_ns,
                     preview_start_ns: clip.timeline_start_ns,
                     preview_source_in_ns: clip.source_in_ns,
                     preview_duration_ns: clip.duration_ns,
                 });
                 (true, Some(TimelineCanvasMessage::SelectClip(Some(clip_id))))
             }
-            HitTarget::ClipRightHandle { clip_id, .. } => {
+            HitTarget::ClipRightHandle { track_id, clip_id } => {
                 let Some((_, clip)) = project.timeline.clip(clip_id) else {
                     return (false, None);
                 };
+                let (_, max_end_ns) = neighbor_bounds(&project.timeline, track_id, clip_id);
+                let max_source_ns = resolve_max_source_ns(project, clip);
                 self.hide_hover_guide = true;
-                let max_source_ns = project
-                    .asset(clip.asset_id)
-                    .filter(|a| a.kind != MediaKind::Image && a.metadata.duration_ns > 0)
-                    .map(|a| a.metadata.duration_ns);
                 self.active = Some(ActiveDrag::TrimmingRight {
                     clip: clip.clone(),
                     initial_x: local.x,
                     max_source_ns,
+                    max_end_ns,
                     preview_duration_ns: clip.duration_ns,
                 });
                 (true, Some(TimelineCanvasMessage::SelectClip(Some(clip_id))))
@@ -157,8 +211,7 @@ impl TimelineInteraction {
             HitTarget::Empty => {
                 self.hide_hover_guide = false;
                 self.active = Some(ActiveDrag::Scrubbing);
-                let time_ns = x_to_time_ns(local.x, px, scroll);
-                (true, Some(TimelineCanvasMessage::ScrubEmpty(time_ns)))
+                (true, Some(TimelineCanvasMessage::ScrubEmpty(x_to_time_ns(local.x, px, scroll))))
             }
         }
     }
@@ -198,12 +251,7 @@ impl TimelineInteraction {
                 (true, Some(TimelineCanvasMessage::Scrub(x_to_time_ns(raw_local.x, px, scroll))))
             }
             ActiveDrag::Moving {
-                clip_id,
-                initial_x,
-                initial_start_ns,
-                preview_start_ns,
-                has_dragged,
-                ..
+                clip_id, initial_x, initial_start_ns, preview_start_ns, has_dragged, ..
             } => {
                 if !*has_dragged && (raw_local.x - *initial_x).abs() <= CLIP_DRAG_THRESHOLD_PX {
                     return (true, None);
@@ -216,22 +264,29 @@ impl TimelineInteraction {
                 (true, None)
             }
             ActiveDrag::TrimmingLeft {
-                clip,
-                initial_x,
-                preview_start_ns,
-                preview_source_in_ns,
-                preview_duration_ns,
+                clip, initial_x, min_start_ns, preview_start_ns, preview_source_in_ns, preview_duration_ns,
             } => {
                 self.hide_hover_guide = true;
-                let (s, src, dur) = compute_left_trim(clip, dx_to_delta_ns(raw_local.x - *initial_x, px));
+                let (mut s, mut src, mut dur) = compute_left_trim(clip, dx_to_delta_ns(raw_local.x - *initial_x, px));
+                if s < *min_start_ns {
+                    let bump = *min_start_ns - s;
+                    s = *min_start_ns;
+                    src = src.saturating_add(bump);
+                    dur = dur.saturating_sub(bump);
+                }
                 *preview_start_ns = s;
                 *preview_source_in_ns = src;
                 *preview_duration_ns = dur;
                 (true, None)
             }
-            ActiveDrag::TrimmingRight { clip, initial_x, max_source_ns, preview_duration_ns } => {
+            ActiveDrag::TrimmingRight { clip, initial_x, max_source_ns, max_end_ns, preview_duration_ns } => {
                 self.hide_hover_guide = true;
-                *preview_duration_ns = compute_right_trim(clip, dx_to_delta_ns(raw_local.x - *initial_x, px), *max_source_ns);
+                let mut dur = compute_right_trim(clip, dx_to_delta_ns(raw_local.x - *initial_x, px), *max_source_ns);
+                if let Some(limit_end) = *max_end_ns {
+                    let max_by_neighbor = limit_end.saturating_sub(clip.timeline_start_ns);
+                    dur = dur.min(max_by_neighbor);
+                }
+                *preview_duration_ns = dur;
                 (true, None)
             }
         }
@@ -243,13 +298,7 @@ impl TimelineInteraction {
         match drag {
             ActiveDrag::Scrubbing => None,
             ActiveDrag::Moving {
-                track_id,
-                clip_id,
-                click_time_ns,
-                initial_start_ns,
-                preview_start_ns,
-                has_dragged,
-                ..
+                track_id, clip_id, click_time_ns, initial_start_ns, preview_start_ns, has_dragged, ..
             } => {
                 if !has_dragged {
                     Some(TimelineCanvasMessage::Scrub(click_time_ns))
@@ -297,6 +346,11 @@ impl TimelineInteraction {
         let Some(pos) = local else {
             return mouse::Interaction::default();
         };
+        if view_state.tool == TimelineTool::Select
+            && hit_test_transition(pos, timeline, overlay_first, view_state.px_per_sec, view_state.scroll_x_px).is_some()
+        {
+            return mouse::Interaction::Pointer;
+        }
         let tracks = display_tracks_ordered(timeline, overlay_first);
         match hit_test(pos, &tracks, view_state.px_per_sec, view_state.scroll_x_px) {
             HitTarget::Ruler { .. } => mouse::Interaction::Pointer,
@@ -306,11 +360,7 @@ impl TimelineInteraction {
                 mouse::Interaction::ResizingHorizontally
             }
             HitTarget::ClipBody { .. } | HitTarget::ClipLeftHandle { .. } | HitTarget::ClipRightHandle { .. } => {
-                if view_state.tool == TimelineTool::Razor {
-                    mouse::Interaction::Crosshair
-                } else {
-                    mouse::Interaction::Grab
-                }
+                if view_state.tool == TimelineTool::Razor { mouse::Interaction::Crosshair } else { mouse::Interaction::Grab }
             }
             HitTarget::Empty => mouse::Interaction::default(),
         }

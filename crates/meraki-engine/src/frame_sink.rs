@@ -8,7 +8,12 @@ use gstreamer_video::prelude::*;
 use meraki_core::PreviewQuality;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::debug;
+
+mod audio;
+pub(crate) use audio::{build_audio_preview_sink, limit_playsink_audio_queue};
+#[cfg(test)]
+use audio::audio_preview_output_sink;
 
 #[derive(Debug, Error)]
 pub enum FrameSinkError {
@@ -113,55 +118,6 @@ pub(crate) fn preview_caps(quality: PreviewQuality) -> gst::Caps {
 
 pub(crate) const MASTER_LEVEL_ELEMENT_NAME: &str = "meraki-master-level";
 pub(crate) const LEVEL_INTERVAL_NS: u64 = 33_000_000;
-
-/// Constrói o sink de áudio do preview (`audioconvert ! audioresample ! level ! volume ! sink`).
-pub(crate) fn build_audio_preview_sink() -> Result<(gst::Bin, gst::Element), FrameSinkError> {
-    let bin = gst::Bin::with_name("meraki-audio-preview-bin");
-    let convert = make_element("audioconvert", "meraki-preview-aconv")?;
-    let resample = make_element("audioresample", "meraki-preview-aresample")?;
-    let volume = make_element("volume", "meraki-preview-volume")?;
-    let sink = audio_preview_output_sink(std::env::var("MERAKI_HEADLESS_AUDIO").as_deref() == Ok("1"))?;
-
-    if gst::ElementFactory::find("level").is_some() {
-        match make_element("level", MASTER_LEVEL_ELEMENT_NAME) {
-            Ok(level) => {
-                level.set_property("post-messages", true);
-                level.set_property("interval", LEVEL_INTERVAL_NS);
-                bin.add_many([&convert, &resample, &level, &volume, &sink])
-                    .map_err(|err| FrameSinkError::BinAdd(err.to_string()))?;
-                gst::Element::link_many([&convert, &resample, &level, &volume, &sink])
-                    .map_err(|err| FrameSinkError::Link(err.to_string()))?;
-                attach_sink_ghost_pad(&bin, &convert, "audioconvert")?;
-                return Ok((bin, volume));
-            }
-            Err(err) => warn!(error = %err, "falha ao criar elemento level; seguindo sem medidor dB master"),
-        }
-    } else {
-        warn!("plugin GStreamer 'level' indisponível; medidor dB master desabilitado");
-    }
-
-    bin.add_many([&convert, &resample, &volume, &sink])
-        .map_err(|err| FrameSinkError::BinAdd(err.to_string()))?;
-    gst::Element::link_many([&convert, &resample, &volume, &sink])
-        .map_err(|err| FrameSinkError::Link(err.to_string()))?;
-    attach_sink_ghost_pad(&bin, &convert, "audioconvert")?;
-
-    Ok((bin, volume))
-}
-
-fn audio_preview_output_sink(headless: bool) -> Result<gst::Element, FrameSinkError> {
-    if !headless {
-        match make_element("autoaudiosink", "meraki-preview-asink") {
-            Ok(sink) => return Ok(sink),
-            Err(err) => warn!(error = %err, "autoaudiosink indisponível; usando fakesink em áudio"),
-        }
-    }
-    let sink = make_element("fakesink", "meraki-preview-afakesink")?;
-    // O sink de vídeo determina o preroll mesmo se o áudio ainda não tiver buffers.
-    sink.set_property("async", false);
-    sink.set_property("sync", true);
-    Ok(sink)
-}
 
 fn configure_multithreading(elem: &gst::Element) {
     if elem.find_property("n-threads").is_some() {

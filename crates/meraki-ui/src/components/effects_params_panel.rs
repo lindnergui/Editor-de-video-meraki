@@ -1,12 +1,13 @@
 use crate::components::effects_inspector::EffectsInspectorMessage;
 use crate::components::resettable_slider::{resettable_slider, ResettableSliderSpec};
+use crate::i18n;
 use crate::theme;
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, horizontal_space, row, text, toggler};
 use iced::{Element, Length};
 use meraki_core::{
-    BlurParams, CinematicParams, ClipEffect, ClipId, EffectParameters, FilmParams, GlitchParams,
-    TransitionParams, ZoomEasing, ZoomParams,
+    AppLanguage, BlurParams, CinematicParams, ClipEffect, ClipId, EffectParameters, FilmParams,
+    GlitchParams, TransitionParams, ZoomEasing, ZoomParams,
 };
 use std::ops::RangeInclusive;
 use uuid::Uuid;
@@ -54,27 +55,26 @@ pub fn view<'a>(
     clip_id: ClipId,
     effect: &'a ClipEffect,
     params: EffectParameters,
+    lang: AppLanguage,
 ) -> Element<'a, EffectsInspectorMessage> {
+    let s = i18n::strings(lang);
     let effect_id = effect.id;
     let mut header = row![
-        text(effect.name.as_str())
-            .size(12)
-            .font(theme::FONT_SEMIBOLD)
-            .color(theme::TEXT_PRIMARY),
+        text(i18n::clip_effect_label(lang, effect)).size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
     ]
     .spacing(6)
     .align_y(Vertical::Center);
 
     if !effect.enabled {
         header = header.push(
-            container(text("Inativo").size(9).font(theme::FONT_MEDIUM).color(theme::TEXT_SECONDARY))
+            container(text(s.inactive).size(9).font(theme::FONT_MEDIUM).color(theme::TEXT_SECONDARY).wrapping(text::Wrapping::None))
                 .padding([2, 6])
                 .style(theme::badge),
         );
     }
     header = header.push(horizontal_space());
     header = header.push(
-        button(text("Resetar efeito").size(10).color(theme::TEXT_SECONDARY))
+        button(text(s.inspector_reset_effect).size(10).color(theme::TEXT_SECONDARY).wrapping(text::Wrapping::None))
             .padding([3, 7])
             .style(theme::ghost_button)
             .on_press(EffectsInspectorMessage::ResetEffectById(clip_id, effect_id)),
@@ -82,19 +82,15 @@ pub fn view<'a>(
 
     let mut body = column![header].spacing(8);
     body = match params {
-        EffectParameters::Zoom(p) => append_zoom_controls(body, clip_id, effect_id, p),
-        EffectParameters::Film(p) => append_film_controls(body, clip_id, effect_id, p),
-        EffectParameters::Cinematic(p) => append_cinematic_controls(body, clip_id, effect_id, p),
-        EffectParameters::Glitch(p) => append_glitch_controls(body, clip_id, effect_id, p),
-        EffectParameters::Blur(p) => append_blur_controls(body, clip_id, effect_id, p),
-        EffectParameters::Transition(p) => append_transition_controls(body, clip_id, effect_id, p),
+        EffectParameters::Zoom(p) => append_zoom_controls(body, clip_id, effect_id, p, s),
+        EffectParameters::Film(p) => append_film_controls(body, clip_id, effect_id, p, s),
+        EffectParameters::Cinematic(p) => append_cinematic_controls(body, clip_id, effect_id, p, s),
+        EffectParameters::Glitch(p) => append_glitch_controls(body, clip_id, effect_id, p, s),
+        EffectParameters::Blur(p) => append_blur_controls(body, clip_id, effect_id, p, s),
+        EffectParameters::Transition(p) => append_transition_controls(body, clip_id, effect_id, p, s),
     };
 
-    container(body)
-        .width(Length::Fill)
-        .padding(10)
-        .style(theme::card)
-        .into()
+    container(body).width(Length::Fill).padding(10).style(theme::card).into()
 }
 
 fn append_zoom_controls<'a>(
@@ -102,67 +98,49 @@ fn append_zoom_controls<'a>(
     clip_id: ClipId,
     effect_id: Uuid,
     p: ZoomParams,
+    s: &'static i18n::Strings,
 ) -> iced::widget::Column<'a, EffectsInspectorMessage> {
     let active = active_zoom_preset(p);
     let presets = row![
-        zoom_preset_pill("Zoom In", ZoomPreset::ZoomIn, active, clip_id, effect_id),
-        zoom_preset_pill("Zoom Out", ZoomPreset::ZoomOut, active, clip_id, effect_id),
-        zoom_preset_pill("Fixo", ZoomPreset::Fixed, active, clip_id, effect_id),
+        zoom_preset_pill(s.inspector_zoom_in, ZoomPreset::ZoomIn, active, clip_id, effect_id),
+        zoom_preset_pill(s.inspector_zoom_out, ZoomPreset::ZoomOut, active, clip_id, effect_id),
+        zoom_preset_pill(s.inspector_zoom_fixed, ZoomPreset::Fixed, active, clip_id, effect_id),
     ]
     .spacing(6);
     col = col.push(presets);
 
     let def = ZoomParams::default();
+    let tip = s.inspector_double_click_reset;
     col = col.push(param_slider(
-        clip_id,
-        effect_id,
-        "Zoom Inicial (%)",
-        format!("{:.0}%", p.start_scale * 100.0),
-        0.5..=3.0,
-        0.05,
-        p.start_scale as f32,
+        clip_id, effect_id, s.inspector_zoom_start, format!("{:.0}%", p.start_scale * 100.0), tip,
+        0.5..=3.0, 0.05, p.start_scale as f32,
         move |v| EffectParameters::Zoom(ZoomParams { start_scale: f64::from(v), ..p }),
         EffectParameters::Zoom(ZoomParams { start_scale: def.start_scale, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id,
-        effect_id,
-        "Zoom Final (%)",
-        format!("{:.0}%", p.end_scale * 100.0),
-        0.5..=3.0,
-        0.05,
-        p.end_scale as f32,
+        clip_id, effect_id, s.inspector_zoom_end, format!("{:.0}%", p.end_scale * 100.0), tip,
+        0.5..=3.0, 0.05, p.end_scale as f32,
         move |v| EffectParameters::Zoom(ZoomParams { end_scale: f64::from(v), ..p }),
         EffectParameters::Zoom(ZoomParams { end_scale: def.end_scale, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id,
-        effect_id,
-        "Foco X",
-        format!("{:.2}", p.focus_x),
-        -1.0..=1.0,
-        0.05,
-        p.focus_x as f32,
+        clip_id, effect_id, s.inspector_focus_x, format!("{:.2}", p.focus_x), tip,
+        -1.0..=1.0, 0.05, p.focus_x as f32,
         move |v| EffectParameters::Zoom(ZoomParams { focus_x: f64::from(v), ..p }),
         EffectParameters::Zoom(ZoomParams { focus_x: def.focus_x, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id,
-        effect_id,
-        "Foco Y",
-        format!("{:.2}", p.focus_y),
-        -1.0..=1.0,
-        0.05,
-        p.focus_y as f32,
+        clip_id, effect_id, s.inspector_focus_y, format!("{:.2}", p.focus_y), tip,
+        -1.0..=1.0, 0.05, p.focus_y as f32,
         move |v| EffectParameters::Zoom(ZoomParams { focus_y: f64::from(v), ..p }),
         EffectParameters::Zoom(ZoomParams { focus_y: def.focus_y, ..p }),
     ));
 
     let easing_row = row![
-        text("Suavização").size(11).color(theme::TEXT_SECONDARY),
+        text(s.inspector_smoothing).size(11).color(theme::TEXT_SECONDARY),
         horizontal_space(),
-        easing_pill("Suave", ZoomEasing::EaseInOut, p, clip_id, effect_id),
-        easing_pill("Linear", ZoomEasing::Linear, p, clip_id, effect_id),
+        easing_pill(s.inspector_smooth, ZoomEasing::EaseInOut, p, clip_id, effect_id),
+        easing_pill(s.inspector_linear, ZoomEasing::Linear, p, clip_id, effect_id),
     ]
     .spacing(6)
     .align_y(Vertical::Center);
@@ -174,28 +152,30 @@ fn append_film_controls<'a>(
     clip_id: ClipId,
     effect_id: Uuid,
     p: FilmParams,
+    s: &'static i18n::Strings,
 ) -> iced::widget::Column<'a, EffectsInspectorMessage> {
     let def = FilmParams::default();
+    let tip = s.inspector_double_click_reset;
     col = col.push(param_slider(
-        clip_id, effect_id, "Intensidade", format!("{:.0}%", p.intensity * 100.0),
+        clip_id, effect_id, s.fx_intensity, format!("{:.0}%", p.intensity * 100.0), tip,
         0.0..=1.0, 0.02, p.intensity as f32,
         move |v| EffectParameters::Film(FilmParams { intensity: f64::from(v), ..p }),
         EffectParameters::Film(FilmParams { intensity: def.intensity, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id, effect_id, "Contraste", format!("{:.2}", p.contrast),
+        clip_id, effect_id, s.fx_contrast, format!("{:.2}", p.contrast), tip,
         0.5..=2.0, 0.02, p.contrast as f32,
         move |v| EffectParameters::Film(FilmParams { contrast: f64::from(v), ..p }),
         EffectParameters::Film(FilmParams { contrast: def.contrast, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id, effect_id, "Saturação", format!("{:.2}", p.saturation),
+        clip_id, effect_id, s.fx_saturation, format!("{:.2}", p.saturation), tip,
         0.0..=2.0, 0.02, p.saturation as f32,
         move |v| EffectParameters::Film(FilmParams { saturation: f64::from(v), ..p }),
         EffectParameters::Film(FilmParams { saturation: def.saturation, ..p }),
     ));
     col.push(param_slider(
-        clip_id, effect_id, "Vinheta", format!("{:.0}%", p.vignette * 100.0),
+        clip_id, effect_id, s.fx_vignette, format!("{:.0}%", p.vignette * 100.0), tip,
         0.0..=1.0, 0.02, p.vignette as f32,
         move |v| EffectParameters::Film(FilmParams { vignette: f64::from(v), ..p }),
         EffectParameters::Film(FilmParams { vignette: def.vignette, ..p }),
@@ -207,28 +187,30 @@ fn append_cinematic_controls<'a>(
     clip_id: ClipId,
     effect_id: Uuid,
     p: CinematicParams,
+    s: &'static i18n::Strings,
 ) -> iced::widget::Column<'a, EffectsInspectorMessage> {
     let def = CinematicParams::default();
+    let tip = s.inspector_double_click_reset;
     col = col.push(param_slider(
-        clip_id, effect_id, "Intensidade", format!("{:.0}%", p.intensity * 100.0),
+        clip_id, effect_id, s.fx_intensity, format!("{:.0}%", p.intensity * 100.0), tip,
         0.0..=1.0, 0.02, p.intensity as f32,
         move |v| EffectParameters::Cinematic(CinematicParams { intensity: f64::from(v), ..p }),
         EffectParameters::Cinematic(CinematicParams { intensity: def.intensity, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id, effect_id, "Contraste", format!("{:.2}", p.contrast),
+        clip_id, effect_id, s.fx_contrast, format!("{:.2}", p.contrast), tip,
         0.5..=2.0, 0.02, p.contrast as f32,
         move |v| EffectParameters::Cinematic(CinematicParams { contrast: f64::from(v), ..p }),
         EffectParameters::Cinematic(CinematicParams { contrast: def.contrast, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id, effect_id, "Saturação", format!("{:.2}", p.saturation),
+        clip_id, effect_id, s.fx_saturation, format!("{:.2}", p.saturation), tip,
         0.0..=2.0, 0.02, p.saturation as f32,
         move |v| EffectParameters::Cinematic(CinematicParams { saturation: f64::from(v), ..p }),
         EffectParameters::Cinematic(CinematicParams { saturation: def.saturation, ..p }),
     ));
     col.push(param_slider(
-        clip_id, effect_id, "Brilho", format!("{:+.2}", p.brightness),
+        clip_id, effect_id, s.fx_brightness, format!("{:+.2}", p.brightness), tip,
         -0.5..=0.5, 0.02, p.brightness as f32,
         move |v| EffectParameters::Cinematic(CinematicParams { brightness: f64::from(v), ..p }),
         EffectParameters::Cinematic(CinematicParams { brightness: def.brightness, ..p }),
@@ -240,22 +222,24 @@ fn append_glitch_controls<'a>(
     clip_id: ClipId,
     effect_id: Uuid,
     p: GlitchParams,
+    s: &'static i18n::Strings,
 ) -> iced::widget::Column<'a, EffectsInspectorMessage> {
     let def = GlitchParams::default();
+    let tip = s.inspector_double_click_reset;
     col = col.push(param_slider(
-        clip_id, effect_id, "Intensidade", format!("{:.0}%", p.intensity * 100.0),
+        clip_id, effect_id, s.fx_intensity, format!("{:.0}%", p.intensity * 100.0), tip,
         0.0..=1.0, 0.02, p.intensity as f32,
         move |v| EffectParameters::Glitch(GlitchParams { intensity: f64::from(v), ..p }),
         EffectParameters::Glitch(GlitchParams { intensity: def.intensity, ..p }),
     ));
     col = col.push(param_slider(
-        clip_id, effect_id, "Deslocamento RGB", format!("{:.0}%", p.rgb_shift * 100.0),
+        clip_id, effect_id, s.fx_rgb_shift, format!("{:.0}%", p.rgb_shift * 100.0), tip,
         0.0..=1.0, 0.02, p.rgb_shift as f32,
         move |v| EffectParameters::Glitch(GlitchParams { rgb_shift: f64::from(v), ..p }),
         EffectParameters::Glitch(GlitchParams { rgb_shift: def.rgb_shift, ..p }),
     ));
     col.push(param_slider(
-        clip_id, effect_id, "Frequência", format!("{:.0}%", p.frequency * 100.0),
+        clip_id, effect_id, s.fx_frequency, format!("{:.0}%", p.frequency * 100.0), tip,
         0.0..=1.0, 0.02, p.frequency as f32,
         move |v| EffectParameters::Glitch(GlitchParams { frequency: f64::from(v), ..p }),
         EffectParameters::Glitch(GlitchParams { frequency: def.frequency, ..p }),
@@ -267,10 +251,11 @@ fn append_blur_controls<'a>(
     clip_id: ClipId,
     effect_id: Uuid,
     p: BlurParams,
+    s: &'static i18n::Strings,
 ) -> iced::widget::Column<'a, EffectsInspectorMessage> {
     let def = BlurParams::default().radius;
     col.push(param_slider(
-        clip_id, effect_id, "Raio / Intensidade", format!("{:.0}%", p.radius * 100.0),
+        clip_id, effect_id, s.fx_blur_radius, format!("{:.0}%", p.radius * 100.0), s.inspector_double_click_reset,
         0.0..=1.0, 0.02, p.radius as f32,
         move |v| EffectParameters::Blur(BlurParams { radius: f64::from(v) }),
         EffectParameters::Blur(BlurParams { radius: def }),
@@ -282,36 +267,27 @@ fn append_transition_controls<'a>(
     clip_id: ClipId,
     effect_id: Uuid,
     p: TransitionParams,
+    s: &'static i18n::Strings,
 ) -> iced::widget::Column<'a, EffectsInspectorMessage> {
     let def_ms = TransitionParams::default().duration_ms;
     let secs = p.duration_ms as f32 / 1000.0;
     col = col.push(param_slider(
-        clip_id,
-        effect_id,
-        "Duração (s)",
-        format!("{secs:.2}s"),
-        0.1..=3.0,
-        0.05,
-        secs.clamp(0.1, 3.0),
+        clip_id, effect_id, s.inspector_transition_duration, format!("{secs:.2}s"), s.inspector_double_click_reset,
+        0.1..=3.0, 0.05, secs.clamp(0.1, 3.0),
         move |v| EffectParameters::Transition(TransitionParams {
-            duration_ms: (v * 1000.0).round().clamp(100.0, 3000.0) as u64,
-            ..p
+            duration_ms: (v * 1000.0).round().clamp(100.0, 3000.0) as u64, ..p
         }),
         EffectParameters::Transition(TransitionParams { duration_ms: def_ms, ..p }),
     ));
 
-    let in_row = edge_toggle_row("Entrada", p.apply_in, move |val| {
+    let in_row = edge_toggle_row(s.inspector_transition_in, p.apply_in, move |val| {
         EffectsInspectorMessage::UpdateEffectParams(
-            clip_id,
-            effect_id,
-            EffectParameters::Transition(TransitionParams { apply_in: val, ..p }),
+            clip_id, effect_id, EffectParameters::Transition(TransitionParams { apply_in: val, ..p }),
         )
     });
-    let out_row = edge_toggle_row("Saída", p.apply_out, move |val| {
+    let out_row = edge_toggle_row(s.inspector_transition_out, p.apply_out, move |val| {
         EffectsInspectorMessage::UpdateEffectParams(
-            clip_id,
-            effect_id,
-            EffectParameters::Transition(TransitionParams { apply_out: val, ..p }),
+            clip_id, effect_id, EffectParameters::Transition(TransitionParams { apply_out: val, ..p }),
         )
     });
     col.push(in_row).push(out_row)
@@ -338,7 +314,7 @@ fn zoom_preset_pill<'a>(
     clip_id: ClipId,
     effect_id: Uuid,
 ) -> Element<'a, EffectsInspectorMessage> {
-    button(text(label).size(10).font(theme::FONT_MEDIUM))
+    button(text(label).size(10).font(theme::FONT_MEDIUM).wrapping(text::Wrapping::None))
         .padding([4, 8])
         .style(theme::filter_pill_button(active == preset))
         .on_press(EffectsInspectorMessage::ApplyZoomPreset(clip_id, effect_id, preset))
@@ -353,7 +329,7 @@ fn easing_pill<'a>(
     effect_id: Uuid,
 ) -> Element<'a, EffectsInspectorMessage> {
     let next = EffectParameters::Zoom(ZoomParams { easing, ..current });
-    button(text(label).size(10).font(theme::FONT_MEDIUM))
+    button(text(label).size(10).font(theme::FONT_MEDIUM).wrapping(text::Wrapping::None))
         .padding([4, 8])
         .style(theme::filter_pill_button(current.easing == easing))
         .on_press(EffectsInspectorMessage::UpdateEffectParams(clip_id, effect_id, next))
@@ -366,6 +342,7 @@ fn param_slider<'a>(
     effect_id: Uuid,
     label: &'a str,
     value_label: String,
+    reset_tooltip: &'a str,
     range: RangeInclusive<f32>,
     step: f32,
     current: f32,
@@ -375,6 +352,7 @@ fn param_slider<'a>(
     resettable_slider(ResettableSliderSpec {
         label,
         value_label,
+        reset_tooltip,
         range,
         step,
         current,

@@ -1,6 +1,7 @@
 use crate::components::timeline_canvas::TimelineCanvasMessage;
 use crate::components::timeline_math::{TimelineTool, TimelineViewState};
 use crate::components::tooltip::{action_tooltip, icon_tooltip};
+use crate::i18n;
 use crate::{icons, theme};
 use iced::alignment::Horizontal;
 use iced::mouse;
@@ -8,13 +9,15 @@ use iced::widget::canvas::{Frame, Path, Stroke};
 use iced::widget::tooltip::Position;
 use iced::widget::{button, column, container, horizontal_rule};
 use iced::{Color, Element, Length, Point, Size};
-use meraki_core::{KeymapProfile, ShortcutAction};
+use meraki_core::{AppLanguage, KeymapProfile, ShortcutAction};
 
 /// Renderiza a barra de ferramentas lateral esquerda da timeline com tooltips dinâmicos.
 pub(crate) fn build_toolbar<'a>(
     view_state: &TimelineViewState,
     profile: KeymapProfile,
+    lang: AppLanguage,
 ) -> Element<'a, TimelineCanvasMessage> {
+    let s = i18n::strings(lang);
     let select_active = view_state.tool == TimelineTool::Select;
 
     let select_btn = action_tooltip(
@@ -23,7 +26,7 @@ pub(crate) fn build_toolbar<'a>(
             select_active,
             TimelineCanvasMessage::SetTool(TimelineTool::Select),
         ),
-        "Selecionar",
+        s.timeline_select,
         profile,
         ShortcutAction::ToolSelect,
         Position::Right,
@@ -35,7 +38,7 @@ pub(crate) fn build_toolbar<'a>(
             false,
             TimelineCanvasMessage::SplitAtPlayhead,
         ),
-        "Cortar na Agulha",
+        s.timeline_split_playhead,
         profile,
         ShortcutAction::SplitAtPlayhead,
         Position::Right,
@@ -47,7 +50,7 @@ pub(crate) fn build_toolbar<'a>(
             view_state.snap_enabled,
             TimelineCanvasMessage::ToggleSnap,
         ),
-        "Imã / Snap",
+        s.timeline_snap,
         profile,
         ShortcutAction::ToggleSnap,
         Position::Right,
@@ -55,13 +58,13 @@ pub(crate) fn build_toolbar<'a>(
 
     let zoom_in_btn = icon_tooltip(
         tool_btn(icons::ZOOM_IN, false, TimelineCanvasMessage::ZoomIn),
-        "Aumentar Zoom",
+        s.timeline_zoom_in,
         Position::Right,
     );
 
     let zoom_out_btn = icon_tooltip(
         tool_btn(icons::ZOOM_OUT, false, TimelineCanvasMessage::ZoomOut),
-        "Diminuir Zoom",
+        s.timeline_zoom_out,
         Position::Right,
     );
 

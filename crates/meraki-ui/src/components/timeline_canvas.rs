@@ -4,7 +4,8 @@ use crate::components::timeline_math::{display_tracks_ordered, TimelineTool, Tim
 use crate::components::timeline_render::{
     build_track_headers, draw_playhead, draw_static_timeline, StaticTimelineSpec,
 };
-pub use crate::components::timeline_render::{compute_effect_badges, EffectBadge};
+pub use crate::components::timeline_render::{compute_effect_badges, truncate_clip_title, EffectBadge};
+pub use crate::components::timeline_transitions::{compute_transition_visuals, hit_test_transition, TransitionVisual};
 use crate::components::timeline_tools::{build_toolbar, draw_hover_guide, wheel_zoom_factor};
 use crate::playback::PlaybackState;
 use crate::theme;
@@ -13,7 +14,8 @@ use iced::mouse;
 use iced::widget::canvas::{self, Canvas, Geometry};
 use iced::widget::{container, row, vertical_rule};
 use iced::{Element, Length, Point, Rectangle, Renderer, Theme};
-use meraki_core::{ClipId, KeymapProfile, Project, TrackId};
+use meraki_core::{AppLanguage, ClipId, KeymapProfile, Project, TrackId};
+use uuid::Uuid;
 
 /// Mensagens de interação diretas na régua, ferramentas e Canvas da timeline.
 #[derive(Debug, Clone)]
@@ -27,6 +29,7 @@ pub enum TimelineCanvasMessage {
     Scrub(u64),
     ScrubEmpty(u64),
     SelectClip(Option<ClipId>),
+    SelectTransition(Option<Uuid>),
     MoveClip { clip_id: ClipId, track_id: TrackId, new_start_ns: u64 },
     TrimClip { clip_id: ClipId, new_start_ns: u64, new_source_in_ns: u64, new_duration_ns: u64 },
     SplitClip { clip_id: ClipId, split_at_ns: u64 },
@@ -38,8 +41,9 @@ pub fn view<'a>(
     playback: &'a PlaybackState,
     view_state: &'a TimelineViewState,
     profile: KeymapProfile,
+    lang: AppLanguage,
 ) -> Element<'a, TimelineCanvasMessage> {
-    view_with_options(project, playback, view_state, profile, false)
+    view_with_options(project, playback, view_state, profile, lang, false)
 }
 
 /// Barra inferior configurável permitindo destacar `T1` no topo (aba Efeitos).
@@ -48,18 +52,19 @@ pub fn view_with_options<'a>(
     playback: &'a PlaybackState,
     view_state: &'a TimelineViewState,
     profile: KeymapProfile,
+    lang: AppLanguage,
     overlay_first: bool,
 ) -> Element<'a, TimelineCanvasMessage> {
     let tracks = display_tracks_ordered(&project.timeline, overlay_first);
-    let canvas_widget = Canvas::new(TimelineProgram { project, playback, view_state, overlay_first })
+    let canvas_widget = Canvas::new(TimelineProgram { project, playback, view_state, overlay_first, lang })
         .width(Length::Fill)
         .height(Length::Fill);
 
     container(
         row![
-            build_toolbar(view_state, profile),
+            build_toolbar(view_state, profile, lang),
             vertical_rule(1).style(theme::divider),
-            build_track_headers(&tracks, overlay_first),
+            build_track_headers(&tracks, overlay_first, lang),
             vertical_rule(1).style(theme::divider),
             canvas_widget,
         ]
@@ -77,6 +82,7 @@ struct TimelineProgram<'a> {
     playback: &'a PlaybackState,
     view_state: &'a TimelineViewState,
     overlay_first: bool,
+    lang: AppLanguage,
 }
 
 #[derive(Default)]
@@ -173,13 +179,16 @@ impl canvas::Program<TimelineCanvasMessage> for TimelineProgram<'_> {
         let px = self.view_state.px_per_sec;
         let scroll = self.view_state.scroll_x_px;
         let drag_preview = state.interaction.active_drag_span(&self.project.timeline);
+        let trim_limit = state.interaction.active_trim_limit();
         let static_key = hash_timeline_static(
             self.project,
             self.overlay_first,
             self.playback.selected_clip_id,
+            self.playback.selected_transition_id,
             px,
             scroll,
             drag_preview,
+            trim_limit,
         );
         state.cache.draw_layers(
             renderer,
@@ -192,10 +201,13 @@ impl canvas::Program<TimelineCanvasMessage> for TimelineProgram<'_> {
                         project: self.project,
                         overlay_first: self.overlay_first,
                         selected_clip_id: self.playback.selected_clip_id,
+                        selected_transition_id: self.playback.selected_transition_id,
                         drag_preview,
+                        trim_limit,
                         px,
                         scroll,
                         bounds_size: bounds.size(),
+                        lang: self.lang,
                     },
                 );
             },

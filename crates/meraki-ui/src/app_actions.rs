@@ -2,15 +2,16 @@ use crate::app::{MerakiApp, Message};
 use crate::components::effects_inspector::{self, EffectsInspectorMessage};
 use crate::components::effects_library::EffectsLibraryMessage;
 use crate::components::timeline_canvas::TimelineCanvasMessage;
+use crate::components::timeline_interaction::resolve_max_source_ns;
 use crate::playback::PlaybackMessage;
 use crate::views::edit::EditMessage;
 use crate::views::effects::{self, EffectsMessage};
 use crate::views::files::{self, FilesMessage};
 use iced::Task;
 use meraki_core::{
-    AddTitleClipCommand, ClipId, ClipTransition, Keyframe, KeyframeEasing,
-    KeyframeProperty, MediaKind, RemoveKeyframeCommand, SetClipTransitionCommand, TitleOverlay,
-    TitleStyle, ToggleClipEffectCommand, TransitionEdge, TransitionKind, UpdateTitleCommand,
+    AddTitleClipCommand, ClipId, ClipTransition, Keyframe, KeyframeEasing, KeyframeProperty,
+    RemoveKeyframeCommand, SetClipTransitionCommand, TitleOverlay, TitleStyle,
+    ToggleClipEffectCommand, TransitionEdge, TransitionKind, UpdateTitleCommand,
     UpsertKeyframeCommand, VideoEffectKind,
 };
 
@@ -142,11 +143,10 @@ impl MerakiApp {
             return;
         }
         match message {
-            EditMessage::InsertAsset(asset_id) => {
-                let _ = self.send_asset_to_timeline(asset_id);
-            }
+            EditMessage::InsertAsset(asset_id) => { let _ = self.send_asset_to_timeline(asset_id); }
             EditMessage::Player(p) => self.handle_player_message(p),
             EditMessage::Inspector(insp_msg) => self.handle_edit_inspector_message(insp_msg),
+            EditMessage::TransitionInspector(tr_msg) => self.handle_transition_inspector_message(tr_msg),
             EditMessage::Timeline(tl) => self.handle_timeline_canvas_message(tl),
             EditMessage::SearchChanged(_) | EditMessage::SelectFolder(_) => {}
         }
@@ -161,6 +161,7 @@ impl MerakiApp {
             EffectsMessage::Player(p) => self.handle_player_message(p),
             EffectsMessage::Overlay(overlay_msg) => self.handle_overlay_message(overlay_msg),
             EffectsMessage::Inspector(insp_msg) => self.handle_effects_inspector(insp_msg),
+            EffectsMessage::TransitionInspector(tr_msg) => self.handle_transition_inspector_message(tr_msg),
             EffectsMessage::Timeline(tl) => self.handle_timeline_canvas_message(tl),
         }
     }
@@ -173,20 +174,21 @@ impl MerakiApp {
                     TitleStyle::QuickCaption => "Legenda Rápida",
                     TitleStyle::Title3D => "Título 3D",
                 };
-                let start_ns = effects::next_title_start_ns(
-                    &self.project,
-                    self.playback.playhead_ns,
-                    DEFAULT_TITLE_DURATION_NS,
-                );
+                let start_ns = effects::next_title_start_ns(&self.project, self.playback.playhead_ns, DEFAULT_TITLE_DURATION_NS);
                 let title = TitleOverlay::new(label, style);
                 if let Ok(clip_id) = self.add_title_clip(start_ns, DEFAULT_TITLE_DURATION_NS, title) {
                     self.effects.title_draft = Some((clip_id, label.to_string()));
                 }
             }
+            EffectsLibraryMessage::ApplyPositionalTransition(kind) => {
+                let _ = self.apply_positional_transition(kind, self.effects.library.transition_placement);
+            }
             EffectsLibraryMessage::ApplyTransition(kind) => self.apply_library_transition(kind),
             EffectsLibraryMessage::ToggleTransition(kind) => self.toggle_selected_transition(kind),
             EffectsLibraryMessage::ToggleVideoEffect(kind) => self.apply_library_video_effect(kind),
-            EffectsLibraryMessage::SearchChanged(_) | EffectsLibraryMessage::ToggleSection(_) => {}
+            EffectsLibraryMessage::SearchChanged(_)
+            | EffectsLibraryMessage::ToggleSection(_)
+            | EffectsLibraryMessage::SetTransitionPlacement(_) => {}
         }
     }
 
@@ -336,32 +338,22 @@ impl MerakiApp {
         match msg {
             TimelineCanvasMessage::Scrub(ns) => self.handle_playback_message(PlaybackMessage::Seek(ns)),
             TimelineCanvasMessage::ScrubEmpty(ns) => {
-                self.clear_inspector_drafts();
+                self.select_transition(None);
                 self.handle_playback_message(PlaybackMessage::SelectClip(None));
                 self.reconcile_selected_effect();
                 self.handle_playback_message(PlaybackMessage::Seek(ns));
             }
             TimelineCanvasMessage::SelectClip(id) => {
-                self.clear_inspector_drafts();
+                self.select_transition(None);
                 self.handle_playback_message(PlaybackMessage::SelectClip(id));
                 self.reconcile_selected_effect();
             }
+            TimelineCanvasMessage::SelectTransition(id) => self.select_transition(id),
             TimelineCanvasMessage::MoveClip { clip_id, track_id, new_start_ns } => {
                 let _ = self.move_clip(clip_id, track_id, new_start_ns);
             }
-            TimelineCanvasMessage::TrimClip {
-                clip_id,
-                new_start_ns,
-                new_source_in_ns,
-                new_duration_ns,
-            } => {
-                let max_src = self
-                    .project
-                    .timeline
-                    .clip(clip_id)
-                    .and_then(|(_, c)| self.project.asset(c.asset_id))
-                    .filter(|a| a.kind != MediaKind::Image && a.metadata.duration_ns > 0)
-                    .map(|a| a.metadata.duration_ns);
+            TimelineCanvasMessage::TrimClip { clip_id, new_start_ns, new_source_in_ns, new_duration_ns } => {
+                let max_src = self.project.timeline.clip(clip_id).and_then(|(_, c)| resolve_max_source_ns(&self.project, c));
                 let _ = self.trim_clip(clip_id, new_start_ns, new_source_in_ns, new_duration_ns, max_src);
             }
             TimelineCanvasMessage::SplitClip { clip_id, split_at_ns } => {

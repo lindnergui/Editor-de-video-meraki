@@ -193,7 +193,7 @@ fn extension_lower(path: &Path) -> Option<String> {
     path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase())
 }
 
-fn is_static_image_extension(path: &Path) -> bool {
+pub(crate) fn is_static_image_extension(path: &Path) -> bool {
     matches!(extension_lower(path).as_deref(), Some("png" | "jpg" | "jpeg" | "webp"))
 }
 

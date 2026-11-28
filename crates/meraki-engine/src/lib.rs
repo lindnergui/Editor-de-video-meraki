@@ -1,6 +1,11 @@
 mod audio_dsp;
 mod audio_dsp_chain;
+mod audio_eq;
+mod audio_fader;
+mod audio_live;
 mod audio_meter;
+mod audio_output;
+mod audio_spectrum;
 mod clip_prepare;
 mod discoverer;
 mod effects_ges;
@@ -18,20 +23,24 @@ mod playback_tests;
 pub mod protocol;
 mod proxy;
 mod proxy_cache;
+mod proxy_manager;
 mod render_monitor;
 mod thumbnailer;
 mod timeline_sync;
+mod timeline_builder;
+mod transition_builder;
 mod video_effects;
 
 pub use protocol::{
-    AudioMeterFrame, BridgeError, EngineCommand, EngineEvent, EngineHandle, EngineWorkerChannel,
-    ThumbnailFrame, TimelineRenderClip, TrackAudioLevel, TrackAudioMix, VideoFrame,
+    AudioEnhancements, AudioMeterFrame, BridgeError, EngineCommand, EngineEvent, EngineHandle, EngineWorkerChannel,
+    ProxyMode, SpectrumBands, ThumbnailFrame, TimelineRenderClip, TimelineTransition, TrackAudioLevel, TrackAudioMix, VideoFrame,
 };
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use glib::{MainContext, MainLoop};
 use meraki_core::AssetId;
 use pipeline::PlaybackEngine;
+use proxy_manager::{ProxyJob, ProxyManager, ProxyQueue};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -81,10 +90,10 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
         return;
     }
 
-    let (mut proxy_manager, proxy_queue) = proxy::ProxyManager::spawn(Arc::clone(&worker));
+    let (mut proxy_manager, proxy_queue, proxy_notices) = ProxyManager::spawn(Arc::clone(&worker));
     let (discover_tx, discover_rx) = bounded::<DiscoverJob>(256);
     let discover_worker_channel = Arc::clone(&worker);
-    let discover_proxy_queue = proxy_queue;
+    let discover_proxy_queue = proxy_queue.clone();
     let discover_join = match thread::Builder::new()
         .name("meraki-discoverer".to_string())
         .spawn(move || run_discoverer_worker(discover_rx, discover_worker_channel, discover_proxy_queue))
@@ -124,11 +133,13 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
         context_ref.spawn_local(async move {
             let mut last_playhead_tick = Instant::now();
             let mut live_edits = live_commands::LiveEdits::default();
+            let mut audio_edits = audio_live::AudioEdits::default();
             loop {
                 for _ in 0..64 {
                     match worker_poll.try_recv_command_checked() {
                         Ok(Some(EngineCommand::Shutdown)) | Err(BridgeError::EngineDisconnected) => {
                             info!("encerrando loop principal do motor multimídia");
+                            proxy_queue.stop();
                             playback.shutdown();
                             exporter.shutdown();
                             let _ = discover_tx_slot.take();
@@ -136,14 +147,16 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
                             return;
                         }
                         Ok(Some(cmd)) => {
-                            if let Some(cmd) = live_edits.collect(cmd) {
+                            if let Some(cmd) = audio_edits.collect(cmd).and_then(|cmd| live_edits.collect(cmd)) {
+                                audio_edits.flush(&mut playback, &worker_poll);
                                 live_edits.flush(&mut playback, &worker_poll).await;
-                                handle_command(&mut playback, &exporter, &worker_poll, discover_tx_slot.as_ref(), cmd).await;
+                                handle_command(&mut playback, &exporter, &proxy_queue, &worker_poll, discover_tx_slot.as_ref(), cmd).await;
                             }
                         }
                         Ok(None) => break,
                         Err(err) => {
                             error!(error = %err, "erro inesperado no canal de comandos");
+                            proxy_queue.stop();
                             playback.shutdown();
                             exporter.shutdown();
                             let _ = discover_tx_slot.take();
@@ -152,7 +165,11 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
                         }
                     }
                 }
+                audio_edits.flush(&mut playback, &worker_poll);
                 live_edits.flush(&mut playback, &worker_poll).await;
+                if let Err(err) = playback.poll_proxies(&proxy_notices).await {
+                    worker_poll.emit_critical(EngineEvent::Error(err.to_string()));
+                }
 
                 playback.poll_bus(&worker_poll);
                 playback.publish_shuttle_rate();
@@ -199,11 +216,13 @@ fn run_engine_thread(worker: EngineWorkerChannel) {
 fn run_discoverer_worker(
     job_rx: Receiver<DiscoverJob>,
     worker: Arc<EngineWorkerChannel>,
-    proxy_queue: proxy::ProxyQueueHandle,
+    proxy_queue: ProxyQueue,
 ) {
     while let Ok(job) = job_rx.recv() {
+        if proxy_queue.is_stopping() { break; }
         match discoverer::discover_media(job.asset_id, &job.path) {
             Ok(metadata) => {
+                if proxy_queue.is_stopping() { break; }
                 debug!(asset_id = %metadata.asset_id, duration_ns = metadata.duration_ns, "mídia descoberta");
                 worker.emit_critical(EngineEvent::MediaDiscovered(metadata.clone()));
                 if metadata.width.is_some() && metadata.height.is_some() {
@@ -211,11 +230,12 @@ fn run_discoverer_worker(
                         worker.emit_critical(EngineEvent::ThumbnailReady(thumb));
                     }
                 }
-                if job.generate_proxy && proxy::needs_proxy(&job.path, &metadata) {
-                    proxy_queue.enqueue(proxy::ProxyJob {
+                if let Some(dimensions) = metadata.width.zip(metadata.height).filter(|_| job.generate_proxy) {
+                    proxy_queue.enqueue(ProxyJob {
                         asset_id: job.asset_id,
                         path: job.path,
-                        metadata,
+                        dimensions,
+                        metadata: Some(metadata),
                     });
                 }
             }
@@ -230,19 +250,32 @@ fn run_discoverer_worker(
 async fn handle_command(
     playback: &mut PlaybackEngine,
     exporter: &exporter::ExportManager,
+    proxies: &ProxyQueue,
     worker: &EngineWorkerChannel,
     discover_tx: Option<&Sender<DiscoverJob>>,
     command: EngineCommand,
 ) {
     let result = match command {
-        EngineCommand::SyncTimeline { clips, audio_mix, preview_quality } => {
-            playback.sync_timeline(clips, audio_mix, preview_quality).await
+        EngineCommand::SyncTimeline { clips, transitions, audio_mix, preview_quality } => {
+            playback.sync_timeline(clips, transitions, audio_mix, preview_quality).await
         }
+        EngineCommand::SetProxyMode(mode) => {
+            playback.set_proxy_mode(mode).await.map(|()| proxies.set_mode(mode))
+        }
+        EngineCommand::EnsureProxy { asset_id, source_path, width, height } => {
+            proxies.enqueue(ProxyJob { asset_id, path: source_path, dimensions: (width, height), metadata: None });
+            Ok(())
+        }
+        EngineCommand::ClearProxyCache => playback.clear_proxy_cache(proxies).await,
         EngineCommand::Play => playback.play(),
         EngineCommand::Shuttle { direction } => playback.shuttle(direction),
         EngineCommand::Pause => playback.pause(),
         EngineCommand::SetPlaybackRate(rate) => playback.set_playback_rate(rate),
         EngineCommand::SetMasterVolume(volume) => playback.set_master_volume(volume),
+        EngineCommand::RequestAudioSpectrum => {
+            playback.publish_audio_spectrum(worker);
+            Ok(())
+        }
         EngineCommand::SetPreviewQuality(quality) => {
             playback.set_preview_quality(quality);
             Ok(())
@@ -273,15 +306,15 @@ async fn handle_command(
         EngineCommand::ToggleTrackAudioEffect { track_id, effect, enabled } => {
             playback.audio_dsp_mut().toggle_track_audio_effect(track_id, effect, enabled)
         }
-        EngineCommand::StartExport { job_id, settings, clips, audio_tracks } => {
-            exporter.enqueue(job_id, settings, clips, audio_tracks);
+        EngineCommand::StartExport { job_id, settings, clips, transitions, audio_tracks } => {
+            exporter.enqueue(job_id, settings, clips, transitions, audio_tracks, playback.master_mix());
             Ok(())
         }
         EngineCommand::CancelExport { job_id } => {
             exporter.cancel(job_id);
             Ok(())
         }
-        EngineCommand::Shutdown | EngineCommand::UpdateClipLive { .. } => Ok(()),
+        EngineCommand::Shutdown | EngineCommand::UpdateClipLive { .. } | EngineCommand::UpdateAudioLive { .. } => Ok(()),
     };
 
     if let Err(err) = result {

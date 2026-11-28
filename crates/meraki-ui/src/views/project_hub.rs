@@ -1,4 +1,5 @@
 use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::views::project_hub_cards::{new_project_square_card, project_square_card};
 pub use crate::views::project_hub_cards::{CARD_SIZE, GRID_COLUMNS, GRID_SPACING};
 use crate::{icons, theme, window_icon};
@@ -9,7 +10,7 @@ use iced::widget::{
     text_input, Column, Row, Space,
 };
 use iced::{Element, Length};
-use meraki_core::RecentProjectEntry;
+use meraki_core::{AppLanguage, RecentProjectEntry};
 use std::path::{Path, PathBuf};
 
 /// Estado local do painel inicial de projetos (`ProjectHub`).
@@ -18,6 +19,7 @@ pub struct ProjectHubState {
     pub search_query: String,
     pub renaming_path: Option<PathBuf>,
     pub rename_draft: String,
+    pub pending_delete_project: Option<RecentProjectEntry>,
 }
 
 /// Ações emitidas pelo painel inicial de projetos.
@@ -34,6 +36,9 @@ pub enum ProjectHubMessage {
     CommitRename,
     CancelRename,
     RemoveRecent(PathBuf),
+    RequestDeleteProject(PathBuf),
+    ConfirmDeleteProject,
+    CancelDeleteProject,
 }
 
 /// Filtra projetos recentes por nome ou caminho de forma case-insensitive.
@@ -79,8 +84,13 @@ pub fn format_short_path(path: &Path) -> String {
 
 /// Formata timestamp Unix UTC em `DD/MM/AAAA HH:MM` sem dependências externas.
 pub fn format_unix_timestamp(unix_secs: u64) -> String {
+    format_unix_timestamp_localized(unix_secs, AppLanguage::PtBr)
+}
+
+/// Formata timestamp Unix UTC ou retorna o selo localizado quando zero.
+pub fn format_unix_timestamp_localized(unix_secs: u64, lang: AppLanguage) -> String {
     if unix_secs == 0 {
-        return "Recente".to_string();
+        return i18n::strings(lang).hub_recent_badge.to_string();
     }
     let days = (unix_secs / 86_400) as i64;
     let secs_of_day = unix_secs % 86_400;
@@ -106,15 +116,17 @@ pub fn view<'a>(
     recent: &'a [RecentProjectEntry],
     settings_open: bool,
     last_error: Option<&'a str>,
+    lang: AppLanguage,
 ) -> Element<'a, ProjectHubMessage> {
-    let header = build_header(settings_open);
+    let s = i18n::strings(lang);
+    let header = build_header(settings_open, lang);
     let filtered = filtered_recent_projects(recent, &state.search_query);
     let has_query = !state.search_query.trim().is_empty();
 
     let title_row = row![
         column![
-            text("Seus Projetos").size(22).font(theme::FONT_BOLD).color(theme::TEXT_PRIMARY),
-            text("Retome uma edição recente ou crie um novo projeto do zero.")
+            text(s.hub_title).size(22).font(theme::FONT_BOLD).color(theme::TEXT_PRIMARY),
+            text(s.hub_subtitle)
                 .size(13)
                 .color(theme::TEXT_SECONDARY),
         ]
@@ -123,7 +135,7 @@ pub fn view<'a>(
         container(
             row![
                 icons::icon(icons::SEARCH, 14.0, theme::TEXT_SECONDARY),
-                text_input("Pesquisar projetos...", &state.search_query)
+                text_input(s.hub_search_placeholder, &state.search_query)
                     .on_input(ProjectHubMessage::SearchChanged)
                     .size(13)
                     .padding([7, 10])
@@ -159,11 +171,11 @@ pub fn view<'a>(
         container(
             column![
                 icons::icon(icons::SEARCH, 22.0, theme::TEXT_SECONDARY),
-                text("Nenhum projeto encontrado")
+                text(s.hub_empty_search_title)
                     .size(14)
                     .font(theme::FONT_SEMIBOLD)
                     .color(theme::TEXT_PRIMARY),
-                text("Tente outro termo ou limpe o campo de pesquisa acima.")
+                text(s.hub_empty_search_desc)
                     .size(12)
                     .color(theme::TEXT_SECONDARY),
             ]
@@ -178,10 +190,10 @@ pub fn view<'a>(
         let mut cards: Vec<Element<'a, ProjectHubMessage>> =
             Vec::with_capacity(filtered.len() + usize::from(!has_query));
         if !has_query {
-            cards.push(new_project_square_card());
+            cards.push(new_project_square_card(lang));
         }
         for entry in filtered {
-            cards.push(project_square_card(entry, state));
+            cards.push(project_square_card(entry, state, lang));
         }
 
         let row_specs = build_grid_row_slot_counts(cards.len());
@@ -231,7 +243,8 @@ pub fn view<'a>(
         .into()
 }
 
-fn build_header<'a>(settings_open: bool) -> Element<'a, ProjectHubMessage> {
+fn build_header<'a>(settings_open: bool, lang: AppLanguage) -> Element<'a, ProjectHubMessage> {
+    let s = i18n::strings(lang);
     let brand = row![
         window_icon::brand_icon(24.0),
         text("meraki").size(18).font(theme::FONT_BOLD).color(theme::TEXT_PRIMARY),
@@ -256,7 +269,7 @@ fn build_header<'a>(settings_open: bool) -> Element<'a, ProjectHubMessage> {
             theme::secondary_button
         })
         .on_press(ProjectHubMessage::ToggleSettings),
-        "Configurações",
+        s.topbar_settings_tip,
         Position::Bottom,
     );
 
@@ -264,7 +277,11 @@ fn build_header<'a>(settings_open: bool) -> Element<'a, ProjectHubMessage> {
         button(
             row![
                 icons::icon(icons::PLUS, 14.0, theme::TEXT_ON_ACCENT),
-                text("Novo Projeto").size(12).font(theme::FONT_SEMIBOLD).color(theme::TEXT_ON_ACCENT),
+                text(s.hub_new_project)
+                    .size(12)
+                    .font(theme::FONT_SEMIBOLD)
+                    .color(theme::TEXT_ON_ACCENT)
+                    .wrapping(text::Wrapping::None),
             ]
             .spacing(6)
             .align_y(Vertical::Center),
@@ -272,7 +289,7 @@ fn build_header<'a>(settings_open: bool) -> Element<'a, ProjectHubMessage> {
         .padding([8, 16])
         .style(theme::primary_button)
         .on_press(ProjectHubMessage::NewProjectClicked),
-        "Criar um novo projeto de vídeo",
+        s.hub_new_project_tip,
         Position::Bottom,
     );
 

@@ -76,9 +76,10 @@ fn voice_preset_eq_drag_enhancements_effects_and_mute_solo_sync_and_undo_redo() 
     assert!(s1.voice_leveler_enabled);
 
     let cmds = drain_commands(&worker);
-    assert_eq!(cmds.iter().filter(|c| matches!(c, EngineCommand::UpdateEqBand { .. })).count(), 4);
-    assert!(cmds.iter().any(|c| matches!(c, EngineCommand::SetNoiseReduction { enabled: true, .. })));
-    assert!(cmds.iter().any(|c| matches!(c, EngineCommand::SetVoiceLeveler { enabled: true, .. })));
+    assert!(matches!(cmds.as_slice(), [EngineCommand::UpdateAudioLive {
+        track_eq: Some((id, gains)), track_enhancements: Some((_, config)), ..
+    }] if *id == a1_id && *gains == s1.eq_gains_db.map(f64::from)
+        && config.noise_reduction_enabled && config.voice_leveler_enabled));
 
     // 2. Arrasta nó de EQ ao vivo e registra 1 único comando no release
     let _ = app.update(Message::Audio(AudioMessage::Eq(EqMessage::BandDragged {
@@ -91,7 +92,7 @@ fn voice_preset_eq_drag_enhancements_effects_and_mute_solo_sync_and_undo_redo() 
     })));
     assert!(drain_commands(&worker)
         .iter()
-        .any(|c| matches!(c, EngineCommand::UpdateEqBand { band: EqBand::Low, gain_db, .. } if (*gain_db - 8.0).abs() < 1e-4)));
+        .any(|c| matches!(c, EngineCommand::UpdateAudioLive { track_eq: Some((id, gains)), .. } if *id == a1_id && gains[0] == 8.0)));
 
     let _ = app.update(Message::Audio(AudioMessage::Eq(EqMessage::BandReleased {
         band: EqBand::Low,
@@ -130,13 +131,13 @@ fn voice_preset_eq_drag_enhancements_effects_and_mute_solo_sync_and_undo_redo() 
     let live_cmds = drain_commands(&worker);
     assert!(live_cmds.iter().any(|c| matches!(
         c,
-        EngineCommand::ToggleTrackAudioEffect { effect: AudioEffectKind::Reverb, enabled: true, .. }
+        EngineCommand::UpdateAudioLive { track_enhancements: Some((_, config)), .. } if config.reverb_enabled
     )));
     assert!(live_cmds.iter().any(|c| matches!(
         c,
-        EngineCommand::ToggleTrackAudioEffect { effect: AudioEffectKind::Echo, enabled: true, .. }
+        EngineCommand::UpdateAudioLive { track_enhancements: Some((_, config)), .. } if config.echo_enabled
     )));
-    assert!(live_cmds.iter().any(|c| matches!(c, EngineCommand::SetTrackMute { track_id, muted: true } if *track_id == a2_id)));
+    assert!(live_cmds.iter().any(|c| matches!(c, EngineCommand::UpdateAudioLive { track_volumes: Some((id, _, true)), .. } if *id == a2_id)));
     assert!(live_cmds.iter().any(|c| matches!(c, EngineCommand::SetTrackSolo { track_id, solo: true } if *track_id == a1_id)));
 
     // 5. Recebe medição dB do motor e atualiza Mixer

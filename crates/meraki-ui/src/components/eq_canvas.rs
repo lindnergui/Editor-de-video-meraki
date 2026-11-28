@@ -1,18 +1,24 @@
+use crate::components::eq_render::EqProgram;
+use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::theme;
 use iced::alignment::Vertical;
-use iced::mouse;
-use iced::widget::canvas::{self, gradient, Canvas, Frame, Geometry, Path, Stroke, Text};
+use iced::widget::canvas::Canvas;
+use iced::widget::tooltip::Position;
 use iced::widget::{
     button, column, container, horizontal_space, row, slider, text, toggler,
 };
-use iced::{Color, Element, Length, Pixels, Point, Rectangle, Renderer, Theme};
-use meraki_core::{EqBand, TrackAudioSettings, MAX_EQ_GAIN_DB, MIN_EQ_GAIN_DB};
+use iced::{Element, Length, Point, Rectangle};
+use meraki_core::{
+    AppLanguage, AutoEqTarget, EqBand, TrackAudioSettings, MAX_EQ_GAIN_DB, MIN_EQ_GAIN_DB,
+};
+use meraki_engine::SpectrumBands;
 
-const BANDS: [(EqBand, &str, f32); 4] = [
-    (EqBand::Low, "Graves", 0.12),
-    (EqBand::LowMid, "Médios-Graves", 0.37),
-    (EqBand::Mid, "Médios", 0.63),
-    (EqBand::High, "Agudos", 0.88),
+pub(crate) const EQ_BANDS: [(EqBand, f32); 4] = [
+    (EqBand::Low, 0.12),
+    (EqBand::LowMid, 0.37),
+    (EqBand::Mid, 0.63),
+    (EqBand::High, 0.88),
 ];
 
 /// Eventos interativos do Equalizador Visual de 4 bandas e melhorias de voz.
@@ -20,6 +26,8 @@ const BANDS: [(EqBand, &str, f32); 4] = [
 pub enum EqMessage {
     BandDragged { band: EqBand, gain_db: f32 },
     BandReleased { band: EqBand, gain_db: f32 },
+    BandReset(EqBand),
+    AutoAdjust(AutoEqTarget),
     ResetEq,
     NoiseReductionToggled(bool),
     NoiseReductionStrengthChanged(f32),
@@ -50,7 +58,7 @@ pub fn eq_y_to_gain(y: f32, plot: Rectangle) -> f32 {
 
 /// Calcula a posição `(x, y)` de um dos 4 nós do equalizador no gráfico.
 pub fn eq_node_position(idx: usize, gain_db: f32, plot: Rectangle) -> Point {
-    let frac = BANDS.get(idx).map_or(0.5, |b| b.2);
+    let frac = EQ_BANDS.get(idx).map_or(0.5, |b| b.1);
     Point::new(plot.x + frac * plot.width, eq_gain_to_y(gain_db, plot))
 }
 
@@ -72,8 +80,7 @@ pub fn sample_eq_curve_points(gains: [f32; 4], plot: Rectangle, segments_per_spa
         let (p0, p1, p2, p3) = (ctrl[span - 1], ctrl[span], ctrl[span + 1], ctrl[span + 2]);
         for s in 0..steps {
             let t = s as f32 / steps as f32;
-            let pt = catmull_rom(p0, p1, p2, p3, t, plot);
-            out.push(pt);
+            out.push(catmull_rom(p0, p1, p2, p3, t, plot));
         }
     }
     out.push(right_edge);
@@ -92,34 +99,98 @@ fn catmull_rom(p0: Point, p1: Point, p2: Point, p3: Point, t: f32, plot: Rectang
 }
 
 /// Painel centro-direita (`#181922`) com Equalizador Visual interativo (`Canvas`) e seção Melhorias.
-pub fn view<'a>(selected_track_name: &'a str, settings: &TrackAudioSettings) -> Element<'a, EqMessage> {
+pub fn view<'a>(
+    selected_track_name: &'a str,
+    settings: &TrackAudioSettings,
+    spectrum: Option<SpectrumBands>,
+    is_playing: bool,
+    auto_eq_notice: Option<&'a str>,
+    lang: AppLanguage,
+) -> Element<'a, EqMessage> {
+    let s = i18n::strings(lang);
+    let auto_voice_btn = icon_tooltip(
+        button(
+            text(s.audio_auto_voice)
+                .size(10)
+                .font(theme::FONT_SEMIBOLD)
+                .wrapping(text::Wrapping::None),
+        )
+        .padding([4, 8])
+        .style(theme::secondary_button)
+        .on_press(EqMessage::AutoAdjust(AutoEqTarget::SpeechYouTube)),
+        s.audio_auto_voice_tip,
+        Position::Top,
+    );
+    let auto_music_btn = icon_tooltip(
+        button(
+            text(s.audio_auto_music)
+                .size(10)
+                .font(theme::FONT_SEMIBOLD)
+                .wrapping(text::Wrapping::None),
+        )
+        .padding([4, 8])
+        .style(theme::secondary_button)
+        .on_press(EqMessage::AutoAdjust(AutoEqTarget::Music)),
+        s.audio_auto_music_tip,
+        Position::Top,
+    );
+    let reset_eq_btn = icon_tooltip(
+        button(
+            text(s.audio_reset_eq)
+                .size(10)
+                .font(theme::FONT_SEMIBOLD)
+                .wrapping(text::Wrapping::None),
+        )
+        .padding([4, 9])
+        .style(theme::secondary_button)
+        .on_press(EqMessage::ResetEq),
+        s.audio_reset_eq_tip,
+        Position::Top,
+    );
+
     let header = row![
-        text("EQUALIZADOR VISUAL").size(11).font(theme::FONT_BOLD).color(theme::TEXT_SECONDARY),
+        text(s.audio_eq_header)
+            .size(11)
+            .font(theme::FONT_BOLD)
+            .color(theme::TEXT_SECONDARY)
+            .wrapping(text::Wrapping::None),
         container(text(selected_track_name).size(10).font(theme::FONT_SEMIBOLD).color(theme::TEXT_ON_ACCENT))
             .padding([3, 8])
             .style(theme::badge_accent),
         horizontal_space(),
-        button(text("Resetar EQ").size(10).font(theme::FONT_SEMIBOLD))
-            .padding([4, 9])
-            .style(theme::secondary_button)
-            .on_press(EqMessage::ResetEq),
+        auto_voice_btn,
+        auto_music_btn,
+        reset_eq_btn,
     ]
-    .spacing(8)
+    .spacing(6)
     .align_y(Vertical::Center);
 
-    let eq_graph = container(Canvas::new(EqProgram { gains_db: settings.eq_gains_db }).width(Length::Fill).height(Length::Fill))
+    let eq_graph = icon_tooltip(
+        container(
+            Canvas::new(EqProgram {
+                gains_db: settings.eq_gains_db,
+                lang,
+                spectrum,
+                is_playing,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill),
+        )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(theme::preview_viewport);
+        .style(theme::preview_viewport),
+        s.audio_eq_tip,
+        Position::Top,
+    );
 
     let nr_pct = (settings.noise_reduction_strength * 100.0).round() as u32;
     let nr_row = row![
         column![
-            text("Redução de Ruído").size(11).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
-            text(format!("Intensidade: {nr_pct}%")).size(10).color(theme::TEXT_SECONDARY),
+            text(s.audio_noise_reduction).size(11).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+            text(format!("{}: {nr_pct}%", s.fx_intensity)).size(10).color(theme::TEXT_SECONDARY),
         ]
         .spacing(2)
-        .width(118),
+        .width(126),
         slider(0.0_f32..=1.0_f32, settings.noise_reduction_strength, EqMessage::NoiseReductionStrengthChanged)
             .step(0.05_f32)
             .on_release(EqMessage::NoiseReductionStrengthReleased)
@@ -135,8 +206,8 @@ pub fn view<'a>(selected_track_name: &'a str, settings: &TrackAudioSettings) -> 
 
     let leveler_row = row![
         column![
-            text("Nivelador de Voz").size(11).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
-            text("Compressor suave para consistência").size(10).color(theme::TEXT_SECONDARY),
+            text(s.audio_voice_leveler).size(11).font(theme::FONT_SEMIBOLD).color(theme::TEXT_PRIMARY),
+            text(s.audio_leveler_desc).size(10).color(theme::TEXT_SECONDARY),
         ]
         .spacing(2),
         horizontal_space(),
@@ -150,7 +221,7 @@ pub fn view<'a>(selected_track_name: &'a str, settings: &TrackAudioSettings) -> 
 
     let enhancements = container(
         column![
-            text("MELHORIAS").size(10).font(theme::FONT_BOLD).color(theme::TEXT_SECONDARY),
+            text(s.audio_enhancements_title).size(10).font(theme::FONT_BOLD).color(theme::TEXT_SECONDARY),
             nr_row,
             leveler_row,
         ]
@@ -160,230 +231,21 @@ pub fn view<'a>(selected_track_name: &'a str, settings: &TrackAudioSettings) -> 
     .padding(10)
     .style(theme::card);
 
-    container(column![header, eq_graph, enhancements].spacing(10).width(Length::Fill).height(Length::Fill))
+    let mut content = column![header].spacing(8).width(Length::Fill).height(Length::Fill);
+    if let Some(notice) = auto_eq_notice {
+        content = content.push(
+            container(text(notice).size(10).color(theme::WARNING))
+                .width(Length::Fill)
+                .padding([5, 8])
+                .style(theme::card),
+        );
+    }
+    content = content.push(eq_graph).push(enhancements);
+
+    container(content)
         .width(Length::FillPortion(66))
         .height(Length::Fill)
         .padding(12)
         .style(theme::sidebar)
         .into()
-}
-
-struct EqProgram {
-    gains_db: [f32; 4],
-}
-
-#[derive(Default)]
-struct EqDragState {
-    dragging: Option<(EqBand, usize)>,
-    hovered: Option<(EqBand, usize)>,
-}
-
-fn plot_rect(bounds: Rectangle) -> Rectangle {
-    let left = 34.0_f32;
-    let right = 14.0_f32;
-    let top = 14.0_f32;
-    let bottom = 26.0_f32;
-    Rectangle {
-        x: left,
-        y: top,
-        width: (bounds.width - left - right).max(40.0),
-        height: (bounds.height - top - bottom).max(40.0),
-    }
-}
-
-impl canvas::Program<EqMessage> for EqProgram {
-    type State = EqDragState;
-
-    fn update(
-        &self,
-        state: &mut Self::State,
-        event: canvas::Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> (canvas::event::Status, Option<EqMessage>) {
-        let Some(local) = cursor.position_in(bounds) else {
-            if let canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) = event {
-                if let Some((band, _)) = state.dragging.take() {
-                    let gain_db = eq_y_to_gain(cursor.position().map_or(bounds.y, |p| p.y - bounds.y), plot_rect(bounds));
-                    return (canvas::event::Status::Captured, Some(EqMessage::BandReleased { band, gain_db }));
-                }
-            }
-            return (canvas::event::Status::Ignored, None);
-        };
-
-        let plot = plot_rect(bounds);
-        match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                if let Some(hit) = hit_eq_band(local, self.gains_db, plot) {
-                    state.dragging = Some(hit);
-                    let gain_db = eq_y_to_gain(local.y, plot);
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(EqMessage::BandDragged { band: hit.0, gain_db }),
-                    );
-                }
-            }
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if let Some((band, _)) = state.dragging {
-                    let gain_db = eq_y_to_gain(local.y, plot);
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(EqMessage::BandDragged { band, gain_db }),
-                    );
-                }
-                state.hovered = hit_eq_band_circle(local, self.gains_db, plot);
-            }
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                if let Some((band, _)) = state.dragging.take() {
-                    let gain_db = eq_y_to_gain(local.y, plot);
-                    return (
-                        canvas::event::Status::Captured,
-                        Some(EqMessage::BandReleased { band, gain_db }),
-                    );
-                }
-            }
-            _ => {}
-        }
-        (canvas::event::Status::Ignored, None)
-    }
-
-    fn draw(
-        &self,
-        state: &Self::State,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG_BASE);
-        let plot = plot_rect(bounds);
-
-        for (db, label) in [(12.0, "+12"), (6.0, "+6"), (0.0, "0 dB"), (-6.0, "-6"), (-12.0, "-12")] {
-            let y = eq_gain_to_y(db, plot);
-            let width = if db.abs() < f32::EPSILON { 1.4 } else { 1.0 };
-            let grid_line = Path::line(Point::new(plot.x, y), Point::new(plot.x + plot.width, y));
-            frame.stroke(&grid_line, Stroke::default().with_color(theme::BORDER_SUBTLE).with_width(width));
-            frame.fill_text(Text {
-                content: label.to_string(),
-                position: Point::new(4.0, y - 6.0),
-                color: theme::TEXT_SECONDARY,
-                size: Pixels(9.0),
-                ..Text::default()
-            });
-        }
-
-        for (idx, (_, label, _)) in BANDS.iter().enumerate() {
-            let pt = eq_node_position(idx, self.gains_db[idx], plot);
-            let vline = Path::line(Point::new(pt.x, plot.y), Point::new(pt.x, plot.y + plot.height));
-            frame.stroke(&vline, Stroke::default().with_color(theme::BORDER_SUBTLE).with_width(1.0));
-            frame.fill_text(Text {
-                content: (*label).to_string(),
-                position: Point::new((pt.x - 24.0).max(plot.x), plot.y + plot.height + 6.0),
-                color: theme::TEXT_SECONDARY,
-                size: Pixels(10.0),
-                ..Text::default()
-            });
-        }
-
-        let curve_pts = sample_eq_curve_points(self.gains_db, plot, 16);
-        let baseline_y = plot.y + plot.height;
-        let fill_path = Path::new(|b| {
-            b.move_to(Point::new(plot.x, baseline_y));
-            for pt in &curve_pts {
-                b.line_to(*pt);
-            }
-            b.line_to(Point::new(plot.x + plot.width, baseline_y));
-            b.close();
-        });
-        let grad = gradient::Linear::new(
-            Point::new(plot.x, plot.y),
-            Point::new(plot.x, baseline_y),
-        )
-        .add_stop(0.0, Color { a: 0.40, ..theme::ACCENT })
-        .add_stop(1.0, Color { a: 0.03, ..theme::ACCENT });
-        frame.fill(&fill_path, grad);
-
-        let curve_path = Path::new(|b| {
-            if let Some(first) = curve_pts.first() {
-                b.move_to(*first);
-                for pt in curve_pts.iter().skip(1) {
-                    b.line_to(*pt);
-                }
-            }
-        });
-        frame.stroke(&curve_path, Stroke::default().with_color(theme::ACCENT).with_width(2.4));
-
-        for (idx, (band, _, _)) in BANDS.iter().enumerate() {
-            let center = eq_node_position(idx, self.gains_db[idx], plot);
-            let active = state.dragging.is_some_and(|(b, _)| b == *band)
-                || state.hovered.is_some_and(|(b, _)| b == *band);
-            if active {
-                frame.fill(&Path::circle(center, 11.0), Color { a: 0.25, ..theme::ACCENT_HOVER });
-            }
-            let dot = Path::circle(center, 6.0);
-            frame.fill(&dot, theme::ACCENT);
-            frame.stroke(&dot, Stroke::default().with_color(theme::TEXT_PRIMARY).with_width(2.0));
-            if active {
-                let db = self.gains_db[idx];
-                frame.fill_text(Text {
-                    content: format!("{db:+.1} dB"),
-                    position: Point::new(center.x - 16.0, (center.y - 20.0).max(2.0)),
-                    color: theme::TEXT_PRIMARY,
-                    size: Pixels(10.0),
-                    ..Text::default()
-                });
-            }
-        }
-
-        vec![frame.into_geometry()]
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &Self::State,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> mouse::Interaction {
-        if state.dragging.is_some() {
-            return mouse::Interaction::Grabbing;
-        }
-        if let Some(local) = cursor.position_in(bounds) {
-            if hit_eq_band_circle(local, self.gains_db, plot_rect(bounds)).is_some() {
-                return mouse::Interaction::Grab;
-            }
-            if plot_rect(bounds).contains(local) {
-                return mouse::Interaction::Pointer;
-            }
-        }
-        mouse::Interaction::default()
-    }
-}
-
-fn hit_eq_band_circle(point: Point, gains: [f32; 4], plot: Rectangle) -> Option<(EqBand, usize)> {
-    for (idx, (band, _, _)) in BANDS.iter().enumerate() {
-        let center = eq_node_position(idx, gains[idx], plot);
-        if point.distance(center) <= 13.0 {
-            return Some((*band, idx));
-        }
-    }
-    None
-}
-
-fn hit_eq_band(point: Point, gains: [f32; 4], plot: Rectangle) -> Option<(EqBand, usize)> {
-    if let Some(hit) = hit_eq_band_circle(point, gains, plot) {
-        return Some(hit);
-    }
-    if !plot.contains(point) {
-        return None;
-    }
-    let mut best: Option<(f32, EqBand, usize)> = None;
-    for (idx, (band, _, _)) in BANDS.iter().enumerate() {
-        let center = eq_node_position(idx, gains[idx], plot);
-        let dx = (point.x - center.x).abs();
-        if best.is_none_or(|(d, _, _)| dx < d) {
-            best = Some((dx, *band, idx));
-        }
-    }
-    best.map(|(_, b, i)| (b, i))
 }

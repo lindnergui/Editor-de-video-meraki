@@ -17,9 +17,9 @@ use crate::{subscription, theme};
 use iced::widget::{column, container, horizontal_rule, image, row, vertical_rule};
 use iced::{Element, Length, Subscription, Task, Theme};
 use meraki_core::{
-    AddAssetCommand, AddClipCommand, AppPreferences, AssetId, ClipId, Command,
-    FolderId, HistoryError, HistoryStack, MediaAsset, MoveClipCommand, PreviewQuality, Project,
-    RemoveClipCommand, SplitClipCommand, TrackId, TrimClipCommand,
+    AddAssetCommand, AddClipCommand, AppLanguage, AppPreferences, AssetId, ClipId, Command,
+    FolderId, HistoryError, HistoryStack, MediaAsset, MediaKind, MoveClipCommand, PreviewQuality,
+    Project, ProxyMode, RemoveClipCommand, SplitClipCommand, TrackId, TrimClipCommand,
 };
 use meraki_engine::{BridgeError, EngineCommand, EngineEvent, EngineHandle};
 use std::path::PathBuf;
@@ -46,15 +46,13 @@ pub enum Message {
     ProjectIo(ProjectIoMessage),
     /// Edição precisa na agulha, ferramentas e navegação quadro a quadro.
     Precision(PrecisionMessage),
-    /// Navegação entre telas v0.2.0 (`ProjectHub`, `KeymapWelcome` e `Editor`).
     Screen(ScreenMessage),
-    /// Pedido de fechamento nativo da janela interceptado pela guarda de alterações.
+    SetLanguage(AppLanguage),
+    SetProxyMode(ProxyMode),
+    ClearProxyCache,
     WindowCloseRequested(iced::window::Id),
-    /// Ação do modal de confirmação ao sair com alterações não salvas.
     ExitGuard(ExitGuardMessage),
-    /// Comandos de reprodução, atalhos de teclado e edição na timeline.
     Playback(PlaybackMessage),
-    /// Evento assíncrono emitido pelo motor multimídia.
     EngineEvent(EngineEvent),
 }
 
@@ -112,10 +110,11 @@ impl MerakiApp {
 
     /// Converte o `Project`/`Timeline` atual em `EngineCommand::SyncTimeline` e despacha ao motor.
     pub fn sync_timeline_to_engine(&self) -> Result<(), BridgeError> {
-        let clips = playback::build_render_clips(&self.project, self.playback.preview_quality);
+        let clips = playback::build_render_clips(&self.project);
         let audio_mix = playback::build_audio_mix(&self.project);
         self.engine.send(EngineCommand::SyncTimeline {
             clips,
+            transitions: self.project.timeline.transitions.clone(),
             audio_mix,
             preview_quality: self.playback.preview_quality,
         })
@@ -145,10 +144,18 @@ impl MerakiApp {
         }
         self.mark_project_dirty();
 
-        if let Err(err) = self.engine.send(EngineCommand::ImportMedia { asset_id, path, generate_proxy }) {
+        let allow_proxy = generate_proxy && self.preferences.proxy_mode != ProxyMode::Off;
+        if let Err(err) = self.engine.send(EngineCommand::ImportMedia {
+            asset_id,
+            path: path.clone(),
+            generate_proxy: allow_proxy,
+        }) {
             let message = err.to_string();
             self.last_error = Some(message.clone());
             return Err(message);
+        }
+        if allow_proxy && kind == MediaKind::Video && self.preferences.proxy_mode == ProxyMode::Always {
+            self.maybe_ensure_proxy_for_asset(asset_id, path, 0, 0);
         }
 
         Ok(asset_id)
@@ -164,6 +171,7 @@ impl MerakiApp {
         let clip_id = clip.id;
         self.execute_timeline_command(Box::new(AddClipCommand::new(track_id, clip)))?;
         self.playback.selected_clip_id = Some(clip_id);
+        self.playback.selected_transition_id = None;
         Ok(clip_id)
     }
 
@@ -235,10 +243,13 @@ impl MerakiApp {
 
     pub(crate) fn clear_inspector_drafts(&mut self) {
         self.edit.transform_draft = None;
+        self.edit.transition_duration_draft = None;
         self.effects.title_draft = None;
         self.effects.title_font_size_draft = None;
         self.effects.transform_draft = None;
         self.effects.effect_params_draft = None;
+        self.effects.transition_duration_draft = None;
+        self.sync_audio_after_history_change();
     }
 
     pub fn request_shutdown(&self) -> Result<(), BridgeError> { self.engine.send(EngineCommand::Shutdown) }
@@ -267,9 +278,7 @@ impl MerakiApp {
         match message {
             Message::SelectTab(tab) => {
                 self.active_tab = tab;
-                if tab == WorkspaceTab::Audio {
-                    self.ensure_audio_tab_ready();
-                }
+                if tab == WorkspaceTab::Audio { self.ensure_audio_tab_ready(); }
                 Task::none()
             }
             Message::ExportClicked => {
@@ -278,34 +287,26 @@ impl MerakiApp {
                 Task::none()
             }
             Message::Files(msg) => self.handle_files_message(msg),
-            Message::Edit(msg) => {
-                self.handle_edit_message(msg);
-                Task::none()
-            }
-            Message::Effects(msg) => {
-                self.handle_effects_message(msg);
-                Task::none()
-            }
+            Message::Edit(msg) => { self.handle_edit_message(msg); Task::none() }
+            Message::Effects(msg) => { self.handle_effects_message(msg); Task::none() }
             Message::Audio(msg) => self.handle_audio_message(msg),
             Message::Delivery(msg) => self.handle_delivery_message(msg),
             Message::ProjectIo(msg) => self.handle_project_io_message(msg),
-            Message::Precision(msg) => {
-                self.handle_precision_message(msg);
-                Task::none()
-            }
+            Message::Precision(msg) => { self.handle_precision_message(msg); Task::none() }
             Message::Screen(msg) => self.handle_screen_message(msg),
-            Message::WindowCloseRequested(id) => {
-                self.request_exit_action(PendingExitAction::CloseWindow(id))
+            Message::SetLanguage(lang) => {
+                if let Err(err) = self.set_language(lang) { self.last_error = Some(err); }
+                Task::none()
             }
+            Message::SetProxyMode(mode) => {
+                if let Err(err) = self.set_proxy_mode(mode) { self.last_error = Some(err); }
+                Task::none()
+            }
+            Message::ClearProxyCache => { self.clear_proxy_cache(); Task::none() }
+            Message::WindowCloseRequested(id) => self.request_exit_action(PendingExitAction::CloseWindow(id)),
             Message::ExitGuard(msg) => self.handle_exit_guard_message(msg),
-            Message::Playback(msg) => {
-                self.handle_playback_message(msg);
-                Task::none()
-            }
-            Message::EngineEvent(event) => {
-                self.handle_engine_event(event);
-                Task::none()
-            }
+            Message::Playback(msg) => { self.handle_playback_message(msg); Task::none() }
+            Message::EngineEvent(event) => { self.handle_engine_event(event); Task::none() }
         }
     }
 
@@ -337,6 +338,9 @@ impl MerakiApp {
         if self.playback.selected_clip_id.is_some_and(|id| self.project.timeline.clip(id).is_none()) {
             self.playback.selected_clip_id = None;
         }
+        if self.playback.selected_transition_id.is_some_and(|id| self.project.timeline.transition(id).is_none()) {
+            self.playback.selected_transition_id = None;
+        }
         self.reconcile_selected_effect();
     }
 
@@ -350,7 +354,8 @@ impl MerakiApp {
             | EngineEvent::ExportFailed { .. }
             | EngineEvent::ExportCancelled { .. } => self.handle_export_engine_event(event),
             other => {
-                self.handle_media_visual_event(&other);
+                self.handle_proxy_and_visual_event(&other);
+                self.handle_audio_engine_event(&other);
                 playback::apply_engine_event(
                     &mut self.playback,
                     &mut self.project,
@@ -369,20 +374,15 @@ impl MerakiApp {
 
     pub(crate) fn view_editor(&self) -> Element<'_, Message> {
         let is_delivery = self.active_tab == WorkspaceTab::Delivery;
-        let profile = self.preferences.keymap;
-        let top = topbar::view(
-            &self.project.name,
-            &self.project_io,
-            self.screens.settings_menu_open,
-            is_delivery,
-        );
-        let left_nav = sidebar::view(self.active_tab);
+        let (profile, lang, banner) = (self.preferences.keymap, self.preferences.language, self.proxy_banner_state());
+        let top = topbar::view(&self.project.name, &self.project_io, self.screens.settings_menu_open, is_delivery, lang);
+        let left_nav = sidebar::view(self.active_tab, lang);
         let main_area = match self.active_tab {
-            WorkspaceTab::Files => files::view(&self.project, &self.files, &self.project_io).map(Message::Files),
-            WorkspaceTab::Edit => edit::view(&self.project, &self.playback, &self.history, &self.edit, &self.project_io, profile).map(Message::Edit),
-            WorkspaceTab::Effects => effects::view(&self.project, &self.playback, &self.history, &self.effects, profile).map(Message::Effects),
-            WorkspaceTab::Audio => audio::view(&self.project, &self.playback, &self.history, &self.audio, profile).map(Message::Audio),
-            WorkspaceTab::Delivery => delivery::view(&self.project, &self.playback, &self.delivery).map(Message::Delivery),
+            WorkspaceTab::Files => files::view(&self.project, &self.files, &self.project_io, lang).map(Message::Files),
+            WorkspaceTab::Edit => edit::view(&self.project, &self.playback, &self.history, &self.edit, &self.project_io, profile, lang, banner).map(Message::Edit),
+            WorkspaceTab::Effects => effects::view(&self.project, &self.playback, &self.history, &self.effects, profile, lang, banner).map(Message::Effects),
+            WorkspaceTab::Audio => audio::view(&self.project, &self.playback, &self.history, &self.audio, profile, lang, banner).map(Message::Audio),
+            WorkspaceTab::Delivery => delivery::view(&self.project, &self.playback, &self.delivery, lang).map(Message::Delivery),
         };
         let body = row![left_nav, vertical_rule(1).style(theme::divider), main_area]
             .width(Length::Fill)

@@ -11,7 +11,7 @@ Repositório oficial: [lindnergui/Editor-de-video-meraki](https://github.com/lin
 1. **Arquivos** — Organização em pastas do projeto, importação de mídias, filtros rápidos (`Todos`, `Vídeos`, `Áudios`, `Imagens`), miniaturas reais, progresso de proxy 720p e pré-visualização com marcação `In`/`Out`.
 2. **Edição** — Gaveta compacta de mídia, player central com seleção de prévia (`720p`/`1080p`), inspetor contextual (`Escala`, `Posição X/Y`, `Opacidade`, `Velocidade`) e timeline interativa em `Canvas` com zoom, snap, corte e alças laterais.
 3. **Efeitos** — Biblioteca categorizada (`Transições`, `Títulos & Textos` na trilha `T1`, `Efeitos de Vídeo`), overlay direto sobre o player e keyframes simplificados (`Linear` vs `Suave [Ease]`).
-4. **Áudio** — Presets de voz (`Voz de Podcast`, `Voz Clara`, `Voz de Rádio`), equalizador visual de 4 bandas em `Canvas`, redução de ruído e nivelador de voz em tempo real, mixer vertical (`M`/`S`/`Master` com medidores dB) e linha de automação de volume na timeline.
+4. **Áudio** — 6 presets reais (`Fala / YouTube`, `Música`, `Podcast`, `Voz Clara`, `Cinema`, `Voz de Rádio`), equalizador paramétrico visual de 4 bandas em `Canvas` com espectro ao vivo, `Auto Voz` / `Auto Música`, redução de ruído e nivelador em tempo real, mixer vertical (`M`/`S`/`Master` com medidores dB e reset por duplo-clique) e linha de automação de volume na timeline.
 5. **Entrega** — Predefinições prontas (`YouTube`, `TikTok & Reels`, `Instagram`, `WhatsApp Leve`, `Alta Qualidade ProRes`, `Apenas Áudio`), estimativa de duração/tamanho, escolha de capa e fila assíncrona de exportação.
 
 Projetos podem ser salvos e reabertos no formato `.meraki` (`Ctrl+S`, `Ctrl+Shift+S`, `Ctrl+O`), com cópia automática de recuperação a cada 60 segundos.
@@ -33,13 +33,13 @@ Dependência estrita e unidirecional:
 
 ## Instalação para Usuários Finais
 
-Baixe a versão mais recente (`v0.3.0`) na página de [Releases](https://github.com/lindnergui/Editor-de-video-meraki/releases):
+Baixe a versão mais recente (`v0.4.0`) na página de [Releases](https://github.com/lindnergui/Editor-de-video-meraki/releases):
 
-- **Destaques da v0.3.0:** preview em tempo real ao arrastar sliders do inspetor, duplo-clique para reset individual de parâmetros, atalhos de transporte `J` / `K` / `L`, inspetor individual de efeitos com presets rápidos de Zoom (`Zoom In`, `Zoom Out`, `Fixo`), badges visuais `FX` nos clipes da timeline, correção de texto duplicado no preview e clique direto na timeline para posicionar a agulha.
-- **Windows (x64):** Execute `Meraki-Setup-v0.3.0-x64.exe` (inclui todas as DLLs e plugins do GStreamer, atalhos e associação opcional de arquivos `.meraki`).
+- **Destaques da v0.4.0:** controles de áudio e mixer em tempo real sem atraso (`UpdateAudioLive`), equalizador paramétrico de 4 bandas com visualizador de espectro ao vivo, reset individual por duplo-clique nas bolinhas do EQ e nos faders do mixer, 6 presets de áudio (`Fala / YouTube`, `Música`, `Podcast`, `Voz Clara`, `Cinema`, `Voz de Rádio`), `Auto Voz` / `Auto Música`, correção visual do badge `MASTER`, transições posicionais na timeline com inspetor dedicado, suporte bilíngue PT-BR/EN e controles de proxy.
+- **Windows (x64):** Execute `Meraki-Setup-v0.4.0-x64.exe` (inclui todas as DLLs e plugins do GStreamer, atalhos e associação opcional de arquivos `.meraki`).
 - **Linux (x86_64 Flatpak):**
   ```bash
-  flatpak install --user Meraki-v0.3.0-x86_64.flatpak
+  flatpak install --user Meraki-v0.4.0-x86_64.flatpak
   flatpak run io.github.lindnergui.Meraki
   ```
 
@@ -83,7 +83,7 @@ cargo run --release -p meraki-app
 ```powershell
 cargo build --release --bin meraki-app
 .\packaging\windows\collect_bundle.ps1
-iscc /DAppVersion=0.3.0 .\packaging\windows\meraki.iss
+iscc /DAppVersion=0.4.0 .\packaging\windows\meraki.iss
 ```
 
 ### Bundle Linux Flatpak
@@ -91,7 +91,7 @@ iscc /DAppVersion=0.3.0 .\packaging\windows\meraki.iss
 mkdir -p .cargo
 cargo vendor vendor > .cargo/config.toml
 flatpak-builder --force-clean --repo=repo build-dir packaging/flatpak/io.github.lindnergui.Meraki.yml
-flatpak build-bundle repo Meraki-v0.3.0-x86_64.flatpak io.github.lindnergui.Meraki
+flatpak build-bundle repo Meraki-v0.4.0-x86_64.flatpak io.github.lindnergui.Meraki
 ```
 
 ---

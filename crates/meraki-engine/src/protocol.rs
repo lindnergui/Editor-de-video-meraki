@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 
+pub use meraki_core::{ProxyMode, SpectrumBands, TimelineTransition};
+
 /// Valor sentinela indicando que não há nenhum pedido de Seek pendente.
 const NO_PENDING_SEEK: u64 = u64::MAX;
 
@@ -18,7 +20,10 @@ const NO_PENDING_SEEK: u64 = u64::MAX;
 pub struct TimelineRenderClip {
     pub clip_id: ClipId,
     pub track_id: TrackId,
+    /// Mídia original, usada em exportação e como fonte de referência da edição.
     pub path: PathBuf,
+    /// Proxy disponível da mídia original. Usado apenas no preview.
+    pub proxy_path: Option<PathBuf>,
     pub track_kind: TrackKind,
     pub timeline_start_ns: u64,
     pub source_in_ns: u64,
@@ -37,6 +42,28 @@ pub struct TimelineRenderClip {
 pub struct TrackAudioMix {
     pub track_id: TrackId,
     pub settings: TrackAudioSettings,
+}
+
+/// Melhorias aplicadas à cadeia DSP de uma trilha.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioEnhancements {
+    pub noise_reduction_enabled: bool,
+    pub noise_reduction_strength: f32,
+    pub voice_leveler_enabled: bool,
+    pub reverb_enabled: bool,
+    pub echo_enabled: bool,
+}
+
+impl From<&TrackAudioSettings> for AudioEnhancements {
+    fn from(settings: &TrackAudioSettings) -> Self {
+        Self {
+            noise_reduction_enabled: settings.noise_reduction_enabled,
+            noise_reduction_strength: settings.noise_reduction_strength,
+            voice_leveler_enabled: settings.voice_leveler_enabled,
+            reverb_enabled: settings.has_effect(AudioEffectKind::Reverb),
+            echo_enabled: settings.has_effect(AudioEffectKind::Echo),
+        }
+    }
 }
 
 /// Quadro de vídeo decodificado pronto para envio à GPU (wgpu / Iced).
@@ -86,9 +113,13 @@ pub enum EngineCommand {
         path: PathBuf,
         generate_proxy: bool,
     },
+    SetProxyMode(ProxyMode),
+    EnsureProxy { asset_id: AssetId, source_path: PathBuf, width: u32, height: u32 },
+    ClearProxyCache,
     /// Controles básicos de transporte e sincronização da timeline GES.
     SyncTimeline {
         clips: Vec<TimelineRenderClip>,
+        transitions: Vec<TimelineTransition>,
         audio_mix: Vec<TrackAudioMix>,
         preview_quality: PreviewQuality,
     },
@@ -108,6 +139,17 @@ pub enum EngineCommand {
     SetPreviewQuality(PreviewQuality),
 
     /// Ajustes de áudio em tempo real (Aba Áudio).
+    UpdateAudioLive {
+        /// Identificador da trilha, ganho em dB e mute.
+        track_volumes: Option<(TrackId, f64, bool)>,
+        master_volume_db: Option<f64>,
+        master_muted: Option<bool>,
+        /// Ganhos em dB na ordem musical definida por `EQ_BAND_SPECS`.
+        track_eq: Option<(TrackId, [f64; 4])>,
+        track_enhancements: Option<(TrackId, AudioEnhancements)>,
+    },
+    /// Solicita a média recente do espectro, inclusive quando o preview está pausado.
+    RequestAudioSpectrum,
     SetTrackGain {
         track_id: TrackId,
         gain_db: f32,
@@ -145,6 +187,7 @@ pub enum EngineCommand {
         job_id: ExportJobId,
         settings: ExportSettings,
         clips: Vec<TimelineRenderClip>,
+        transitions: Vec<TimelineTransition>,
         audio_tracks: Vec<TrackAudioMix>,
     },
     CancelExport {
@@ -161,6 +204,10 @@ pub enum EngineEvent {
     EngineReady,
     MediaDiscovered(MediaMetadata),
     ThumbnailReady(ThumbnailFrame),
+    ProxyGenerating { asset_id: AssetId },
+    ProxyReady { asset_id: AssetId, proxy_path: PathBuf },
+    ProxyFailed { asset_id: AssetId, reason: String },
+    ProxyCacheCleared { freed_bytes: u64 },
     ProxyProgress {
         asset_id: AssetId,
         /// Progresso entre 0.0 e 1.0.
@@ -177,6 +224,7 @@ pub enum EngineEvent {
     TitleBounds { clip_id: ClipId, bounds: Option<meraki_core::NormalizedTitleBox> },
     /// Níveis de áudio atualizados (~30 Hz) para o Mixer vertical.
     AudioLevels(AudioMeterFrame),
+    AudioSpectrum(SpectrumBands),
     ExportProgress {
         job_id: ExportJobId,
         progress: f32,

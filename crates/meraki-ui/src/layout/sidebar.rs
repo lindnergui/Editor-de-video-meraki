@@ -1,16 +1,19 @@
 use crate::app::Message;
 use crate::components::tooltip::icon_tooltip;
+use crate::i18n;
 use crate::navigation::WorkspaceTab;
 use crate::{icons, theme};
 use iced::alignment::Horizontal;
 use iced::widget::tooltip::Position;
 use iced::widget::{button, column, container, text, Column};
 use iced::{Element, Length};
+use meraki_core::AppLanguage;
 
 /// Barra lateral esquerda fixa com exatamente as 5 abas oficiais de navegação.
-pub fn view<'a>(active_tab: WorkspaceTab) -> Element<'a, Message> {
+pub fn view<'a>(active_tab: WorkspaceTab, lang: AppLanguage) -> Element<'a, Message> {
     let items = Column::with_children(WorkspaceTab::ALL.into_iter().map(|tab| {
         let is_active = tab == active_tab;
+        let label = i18n::tab_label(lang, tab);
         let icon_color = if is_active {
             theme::TEXT_ON_ACCENT
         } else {
@@ -24,7 +27,7 @@ pub fn view<'a>(active_tab: WorkspaceTab) -> Element<'a, Message> {
 
         let content = column![
             icons::icon(tab.icon_bytes(), 20.0, icon_color),
-            text(tab.label()).size(11).font(label_font),
+            text(label).size(11).font(label_font).wrapping(text::Wrapping::None),
         ]
         .align_x(Horizontal::Center)
         .spacing(5)
@@ -41,7 +44,7 @@ pub fn view<'a>(active_tab: WorkspaceTab) -> Element<'a, Message> {
         .style(theme::nav_tab_button(is_active))
         .on_press(Message::SelectTab(tab));
 
-        icon_tooltip(tab_btn, tab.label(), Position::Right)
+        icon_tooltip(tab_btn, label, Position::Right)
     }))
     .spacing(6)
     .width(Length::Fill);

@@ -1,12 +1,13 @@
 use crate::app::{MerakiApp, Message};
 use crate::app_exit_guard::PendingExitAction;
+use crate::app_proxy::ProxyStatus;
 use crate::project_storage::managed_project_path_in;
 use iced::keyboard::key::Key;
 use iced::keyboard::Modifiers;
 use iced::widget::image;
 use iced::Task;
-use meraki_core::{AssetId, MediaKind, PreviewQuality, Project, RenameProjectCommand};
-use meraki_engine::{EngineCommand, EngineEvent};
+use meraki_core::{AssetId, MediaKind, Project, ProxyMode, RenameProjectCommand};
+use meraki_engine::EngineCommand;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,8 @@ pub struct ProjectIoState {
     pub name_draft: String,
     pub thumbnails: HashMap<AssetId, image::Handle>,
     pub proxy_progress: HashMap<AssetId, f32>,
+    pub proxy_status: HashMap<AssetId, ProxyStatus>,
+    pub status_notice: Option<String>,
 }
 
 /// Mensagens relacionadas à persistência `.meraki`, renomeação inline e auto-save.
@@ -194,7 +197,8 @@ impl MerakiApp {
                 }
             }
             if asset.path.is_file() {
-                let generate_proxy = matches!(asset.kind, MediaKind::Video) && asset.proxy_path.is_none();
+                let generate_proxy = matches!(asset.kind, MediaKind::Video)
+                    && self.preferences.proxy_mode != ProxyMode::Off;
                 import_requests.push((asset.id, asset.path.clone(), generate_proxy));
             } else {
                 missing_paths.push(asset.path.clone());
@@ -214,6 +218,8 @@ impl MerakiApp {
         self.files.selected_folder = None;
         self.project_io.thumbnails.clear();
         self.project_io.proxy_progress.clear();
+        self.project_io.proxy_status.clear();
+        self.project_io.status_notice = None;
         self.project_io.editing_name = false;
         self.project_io.name_draft.clear();
         self.project_io.project_file_path = Some(path.to_path_buf());
@@ -234,6 +240,7 @@ impl MerakiApp {
                 break;
             }
         }
+        self.ensure_proxies_for_loaded_project();
 
         if missing_paths.is_empty() {
             self.last_error = None;
@@ -330,41 +337,6 @@ impl MerakiApp {
                 }
                 Task::none()
             }
-        }
-    }
-
-    pub(crate) fn handle_media_visual_event(&mut self, event: &EngineEvent) {
-        match event {
-            EngineEvent::ThumbnailReady(thumb) => {
-                let handle = image::Handle::from_rgba(
-                    thumb.width,
-                    thumb.height,
-                    thumb.rgba_pixels.clone(),
-                );
-                self.project_io.thumbnails.insert(thumb.asset_id, handle);
-            }
-            EngineEvent::ProxyProgress {
-                asset_id,
-                progress,
-                proxy_path,
-            } => {
-                if let Some(path) = proxy_path {
-                    if let Some(asset) = self.project.asset_mut(*asset_id) {
-                        asset.proxy_path = Some(path.clone());
-                    }
-                    self.project_io.proxy_progress.remove(asset_id);
-                    if self.playback.preview_quality == PreviewQuality::Proxy720p {
-                        if let Err(err) = self.sync_timeline_to_engine() {
-            self.last_error = Some(err.to_string());
-        }
-                    }
-                } else {
-                    self.project_io
-                        .proxy_progress
-                        .insert(*asset_id, progress.clamp(0.0, 1.0));
-                }
-            }
-            _ => {}
         }
     }
 }
